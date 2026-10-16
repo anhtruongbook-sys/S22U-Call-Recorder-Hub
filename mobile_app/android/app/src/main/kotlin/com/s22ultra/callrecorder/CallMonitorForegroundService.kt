@@ -17,13 +17,6 @@ import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 
-/**
- * Dịch vụ Điều phối Nền & Tự động Khôi phục Trợ năng sau khi dùng App Ngân hàng (v1.5.0):
- * - Khi OTTCallAccessibilityService tự động tắt (`disableSelf()`) lúc người dùng mở App Ngân hàng:
- *   1. Nếu máy có quyền WRITE_SECURE_SETTINGS: Tự động bật lại ngầm Trợ năng ngay khi có cuộc gọi mới!
- *   2. Nếu máy chưa cấp WRITE_SECURE_SETTINGS: Hiển thị nút 1-chạm [Bật lại Trợ năng] ngay trên thanh thông báo
- *      và vẫn duy trì thu âm dự phòng qua Foreground Microphone.
- */
 class CallMonitorForegroundService : Service() {
 
     companion object {
@@ -32,6 +25,7 @@ class CallMonitorForegroundService : Service() {
 
         const val ACTION_START_GUARD = "com.s22ultra.callrecorder.ACTION_START_GUARD"
         const val ACTION_BANKING_STEALTH_TRIGGERED = "com.s22ultra.callrecorder.ACTION_BANKING_STEALTH_TRIGGERED"
+        const val ACTION_DISABLE_ACCESSIBILITY_NOW = "com.s22ultra.callrecorder.ACTION_DISABLE_ACCESSIBILITY_NOW"
         const val ACTION_QUICK_RECORD = "com.s22ultra.callrecorder.ACTION_QUICK_RECORD"
         const val ACTION_STOP_RECORD = "com.s22ultra.callrecorder.ACTION_STOP_RECORD"
 
@@ -87,9 +81,18 @@ class CallMonitorForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        val isAccNow = OTTCallAccessibilityService.instance != null
 
         if (!isGuardRunning) {
-            val notif = buildNotification("Trực chiến thông minh (Tự ẩn khi mở App Ngân hàng)", false, false)
+            val notif = buildNotification(
+                contentText = if (isAccNow) {
+                    "Trợ năng ĐANG BẬT • Chạm icon Ngân hàng sẽ tự tắt hoặc bấm nút dưới"
+                } else {
+                    "Trợ năng ĐANG TẮT (Dùng Ngân hàng thoải mái) • Bấm dưới để Bật lại"
+                },
+                recordingNow = false,
+                accessibilityCurrentlyOn = isAccNow
+            )
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
@@ -112,13 +115,33 @@ class CallMonitorForegroundService : Service() {
         }
 
         when (action) {
+            ACTION_START_GUARD -> {
+                val accOn = OTTCallAccessibilityService.instance != null
+                updateNotification(
+                    contentText = if (accOn) {
+                        "Trợ năng ĐANG BẬT • Chạm icon Ngân hàng sẽ tự tắt hoặc bấm nút dưới"
+                    } else {
+                        "Trợ năng ĐANG TẮT (Dùng Ngân hàng thoải mái) • Bấm dưới để Bật lại"
+                    },
+                    recordingNow = false,
+                    accessibilityCurrentlyOn = accOn
+                )
+            }
+            ACTION_DISABLE_ACCESSIBILITY_NOW -> {
+                OTTCallAccessibilityService.instance?.triggerInstantSelfDisable("Nút 1-chạm")
+                updateNotification(
+                    contentText = "ĐÃ TẮT TRỢ NĂNG! Bạn có thể mở mọi App Ngân hàng ngay bây giờ.",
+                    recordingNow = false,
+                    accessibilityCurrentlyOn = false
+                )
+            }
             ACTION_BANKING_STEALTH_TRIGGERED -> {
                 val pkg = intent.getStringExtra("bankingPkg") ?: "Ngân hàng"
                 lastDetectedApp = "Đã tự tắt Trợ năng cho $pkg"
                 updateNotification(
-                    "Đã tự tắt Trợ năng để bạn dùng App Ngân hàng. Xong bấm [Bật Lại Trợ Năng]",
+                    contentText = "ĐÃ TẮT TRỢ NĂNG ($pkg). Giao dịch xong bấm [Bật Lại Trợ Năng]",
                     recordingNow = false,
-                    showReEnableAccessibility = true
+                    accessibilityCurrentlyOn = false
                 )
             }
             ACTION_QUICK_RECORD -> {
@@ -129,14 +152,23 @@ class CallMonitorForegroundService : Service() {
                         remoteGainBoost = OTTCallAccessibilityService.remoteGainBoost,
                         autoBoostEarpieceVolume = OTTCallAccessibilityService.autoBoostVolume
                     )
-                    updateNotification("ĐANG GHI ÂM CUỘC GỌI (48kHz Smooth DSP)...", true, false)
+                    updateNotification(
+                        contentText = "ĐANG GHI ÂM CUỘC GỌI (48kHz Smooth DSP)...",
+                        recordingNow = true,
+                        accessibilityCurrentlyOn = OTTCallAccessibilityService.instance != null
+                    )
                 }
             }
             ACTION_STOP_RECORD -> {
                 val activeEngine = OTTCallAccessibilityService.instance?.dspEngine ?: dspEngine
                 if (activeEngine.isRecording) {
                     activeEngine.stopRecording()
-                    updateNotification("Đã lưu cuộc gọi gần nhất", false, false)
+                    val accOn = OTTCallAccessibilityService.instance != null
+                    updateNotification(
+                        contentText = "Đã lưu cuộc gọi gần nhất",
+                        recordingNow = false,
+                        accessibilityCurrentlyOn = accOn
+                    )
                 }
             }
         }
@@ -164,11 +196,9 @@ class CallMonitorForegroundService : Service() {
 
         if (isCall && !wasInActiveCall) {
             wasInActiveCall = true
-            // Nếu máy có quyền WRITE_SECURE_SETTINGS, tự động bật lại Trợ năng ngay khi có cuộc gọi!
             if (OTTCallAccessibilityService.instance == null) {
                 tryAutoRestoreAccessibilityIfPermitted()
             }
-            // Nếu OTTCallAccessibilityService chưa bật lại, ForegroundService tự động thu âm luôn!
             if (OTTCallAccessibilityService.instance == null && autoRecordOttEnabled && !dspEngine.isRecording) {
                 val tag = if (mode == AudioManager.MODE_IN_CALL) "SIM_Call" else "OTT_Call"
                 dspEngine.startRecording(
@@ -182,7 +212,11 @@ class CallMonitorForegroundService : Service() {
             wasInActiveCall = false
             if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
                 dspEngine.stopRecording()
-                updateNotification("Đã lưu cuộc gọi gần nhất", false, false)
+                updateNotification(
+                    "Đã lưu cuộc gọi gần nhất",
+                    false,
+                    OTTCallAccessibilityService.instance != null
+                )
             }
         }
     }
@@ -194,7 +228,7 @@ class CallMonitorForegroundService : Service() {
                 "S22U Smart Banking Stealth Guard",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Tự động tắt Trợ năng khi mở App Ngân hàng và thông báo bật lại 1-chạm"
+                description = "Tự động tắt Trợ năng khi mở App Ngân hàng và nút Bật/Tắt 1-chạm trên thanh thông báo"
                 setShowBadge(false)
             }
             val nm = getSystemService(NotificationManager::class.java)
@@ -205,7 +239,7 @@ class CallMonitorForegroundService : Service() {
     private fun buildNotification(
         contentText: String,
         recordingNow: Boolean,
-        showReEnableAccessibility: Boolean
+        accessibilityCurrentlyOn: Boolean
     ): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingLaunch = PendingIntent.getActivity(
@@ -216,13 +250,30 @@ class CallMonitorForegroundService : Service() {
         )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("S22U Call Recorder (Smart Banking Stealth)")
+            .setContentTitle("S22U Call Recorder Hub")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingLaunch)
             .setOngoing(true)
 
-        if (showReEnableAccessibility) {
+        // Nút 1: Nếu Trợ năng đang BẬT -> Hiện nút [Tắt Trợ Năng (Dùng Ngân Hàng)] (tắt tức thì trong 0.001s không cần vào Settings!)
+        //        Nếu Trợ năng đang TẮT -> Hiện nút [Bật Lại Trợ Năng]
+        if (accessibilityCurrentlyOn) {
+            val disableIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                action = ACTION_DISABLE_ACCESSIBILITY_NOW
+            }
+            val pendingDisable = PendingIntent.getService(
+                this,
+                4,
+                disableIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                android.R.drawable.ic_secure,
+                "Tắt Trợ Năng (Dùng NH)",
+                pendingDisable
+            )
+        } else {
             val accIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -232,9 +283,14 @@ class CallMonitorForegroundService : Service() {
                 accIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            builder.addAction(android.R.drawable.ic_lock_power_off, "Bật Lại Trợ Năng", pendingAcc)
+            builder.addAction(
+                android.R.drawable.ic_lock_power_off,
+                "Bật Lại Trợ Năng",
+                pendingAcc
+            )
         }
 
+        // Nút 2: Ghi Âm Ngay / Dừng & Lưu File
         if (recordingNow) {
             val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                 action = ACTION_STOP_RECORD
@@ -245,7 +301,7 @@ class CallMonitorForegroundService : Service() {
                 stopIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            builder.addAction(android.R.drawable.ic_media_pause, "Dừng & Lưu File", pendingStop)
+            builder.addAction(android.R.drawable.ic_media_pause, "Dừng & Lưu", pendingStop)
         } else {
             val recIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                 action = ACTION_QUICK_RECORD
@@ -256,7 +312,7 @@ class CallMonitorForegroundService : Service() {
                 recIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            builder.addAction(android.R.drawable.ic_btn_speak_now, "Ghi Âm Ngay", pendingRec)
+            builder.addAction(android.R.drawable.ic_btn_speak_now, "Ghi Ngay", pendingRec)
         }
 
         return builder.build()
@@ -265,10 +321,10 @@ class CallMonitorForegroundService : Service() {
     private fun updateNotification(
         contentText: String,
         recordingNow: Boolean,
-        showReEnableAccessibility: Boolean
+        accessibilityCurrentlyOn: Boolean
     ) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(NOTIF_ID, buildNotification(contentText, recordingNow, showReEnableAccessibility))
+        nm?.notify(NOTIF_ID, buildNotification(contentText, recordingNow, accessibilityCurrentlyOn))
     }
 
     override fun onDestroy() {

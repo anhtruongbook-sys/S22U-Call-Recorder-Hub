@@ -354,9 +354,37 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                 ],
               ),
               const SizedBox(height: 6),
-              Text(
-                'Ứng dụng OTT gần nhất: ${_status['lastDetectedApp'] ?? 'Chưa có'}',
-                style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Trạng thái: ${_status['lastDetectedApp'] ?? 'Sẵn sàng'}',
+                      style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (accEnabled)
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                      ),
+                      onPressed: () async {
+                        await _channel.invokeMethod('disableAccessibilityNow');
+                        await _refreshStatusOnly();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã TẮT Trợ năng tức thì! Bạn có thể mở mọi App Ngân hàng ngay bây giờ.'),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.account_balance_outlined, size: 16),
+                      label: const Text('Tắt mở Ngân hàng', style: TextStyle(fontSize: 12)),
+                    ),
+                ],
               ),
               if (isRecording) ...[
                 const SizedBox(height: 10),

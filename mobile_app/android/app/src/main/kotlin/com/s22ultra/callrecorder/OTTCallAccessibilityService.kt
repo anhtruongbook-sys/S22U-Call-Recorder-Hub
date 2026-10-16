@@ -10,13 +10,14 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * Dịch vụ Trợ năng Thông minh (Smart Banking Stealth v1.5.0):
- * 1. Bình thường giữ đặc quyền thu âm 2 chiều cho Zalo, Viber, Telegram, WhatsApp & SIM (48kHz Smooth DSP).
- * 2. Ngay khoảnh khắc người dùng chạm mở bất kỳ App Ngân hàng / Ví điện tử / VNeID nào:
- *    - Trong vòng < 5ms đầu tiên của sự kiện TYPE_WINDOW_STATE_CHANGED (trước khi App Ngân hàng kịp quét bảo mật),
- *      dịch vụ gọi ngay lập tức `disableSelf()` để tự tắt Trợ năng hoàn toàn.
- *    - Đồng thời báo cho CallMonitorForegroundService hiển thị nút "Bật lại Trợ năng" (hoặc tự động bật lại ngầm
- *      nếu máy có quyền WRITE_SECURE_SETTINGS) sau khi người dùng giao dịch ngân hàng xong.
+ * Dịch vụ Trợ năng Thông minh (Smart Banking Stealth v1.6.0 - Pre-Launch Click Interception):
+ * - Giải quyết triệt để vấn đề App Ngân hàng kiểm tra Accessibility ngay trong Application.onCreate()
+ *   (trước khi cửa sổ Activity của App Ngân hàng kịp hiển thị):
+ *   1. Bắt sự kiện chạm ngón tay `TYPE_VIEW_CLICKED` ngay trên màn hình chính Samsung One UI Launcher:
+ *      Khi ngón tay chạm vào icon mang tên Ngân hàng (VCB, BIDV, MB, Techcombank, VietinBank, ACB, VPBank, VNeID...),
+ *      dịch vụ gọi `disableSelf()` ở t = 1ms (trước khi tiến trình App Ngân hàng kịp khởi tạo 150ms!).
+ *   2. Bắt cả `TYPE_WINDOW_STATE_CHANGED` & `TYPE_WINDOWS_CHANGED` với quyền `QUERY_ALL_PACKAGES` đầy đủ.
+ *   3. Hỗ trợ nút tắt tức thì 1-chạm `[Tắt Trợ Năng (Ngân Hàng)]` ngay trên thanh thông báo.
  */
 class OTTCallAccessibilityService : AccessibilityService() {
 
@@ -38,7 +39,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
         var autoBoostVolume: Boolean = true
 
         @Volatile
-        var lastDetectedApp: String = "Sẵn sàng (Smart Banking Stealth)"
+        var lastDetectedApp: String = "Sẵn sàng (Pre-Launch Banking Stealth)"
 
         val SUPPORTED_OTT_PACKAGES = mapOf(
             "com.zing.zalo" to "Zalo",
@@ -51,7 +52,6 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "com.samsung.android.dialer" to "SIM_Call"
         )
 
-        // Danh sách các ứng dụng Ngân hàng Việt Nam, Ví điện tử & VNeID kiểm tra Accessibility
         val VIETNAMESE_BANKING_PACKAGES = setOf(
             "com.VCB",
             "com.vnpay.bidv",
@@ -90,10 +90,13 @@ class OTTCallAccessibilityService : AccessibilityService() {
         )
 
         val BANKING_KEYWORDS = listOf(
-            "bank", "vcb", "bidv", "ipay", "mbmobile", "techcombank",
-            "vpbank", "agribank", "sacombank", "tpbank", "hdbank",
-            "vib.", "ocb.", "seabank", "lpbank", "shb.", "eximbank",
-            "vnid", "smartbanking", "digibank", "mbanking", "ebanking"
+            "bank", "vcb", "vietcombank", "bidv", "ipay", "vietinbank",
+            "mbmobile", "mbbank", "mb bank", "techcombank", "vpbank",
+            "agribank", "sacombank", "tpbank", "hdbank", "myvib", "vib ",
+            "ocb", "seabank", "lpbank", "lienviet", "shb", "eximbank",
+            "msb", "nam a", "abbank", "pvcombank", "bvbank", "timo",
+            "cake", "tnex", "vnid", "vneid", "smartbanking", "digibank",
+            "mbanking", "ebanking", "ngân hàng"
         )
 
         fun isBankingPackage(pkgName: String): Boolean {
@@ -109,6 +112,16 @@ class OTTCallAccessibilityService : AccessibilityService() {
             if (VIETNAMESE_BANKING_PACKAGES.contains(pkgName)) return true
             val lower = pkgName.lowercase()
             return BANKING_KEYWORDS.any { lower.contains(it) }
+        }
+
+        fun isBankingLabelClicked(labelText: String): Boolean {
+            if (labelText.isBlank()) return false
+            val lower = labelText.lowercase().trim()
+            if (lower.contains("s22u") || lower.contains("call recorder") || lower.contains("smart banking stealth")) {
+                return false
+            }
+            return BANKING_KEYWORDS.any { lower.contains(it) } ||
+                    lower == "mb" || lower == "acb" || lower == "vib" || lower == "shb" || lower == "ocb" || lower == "msb"
         }
     }
 
@@ -130,24 +143,37 @@ class OTTCallAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         dspEngine = AudioDspRecorderEngine(applicationContext)
-        lastDetectedApp = "Trợ năng ĐANG BẬT (Sẵn sàng tự ẩn khi mở Ngân hàng)"
+        lastDetectedApp = "Trợ năng ĐANG BẬT (Tự ẩn khi chạm icon Ngân hàng)"
+        notifyForegroundGuardStatusChanged(enabled = true, reason = "Trợ năng ĐANG BẬT")
         handler.post(audioStatePoller)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        val pkgName = event.packageName?.toString() ?: return
+        val pkgName = event.packageName?.toString() ?: ""
 
-        // 1. KIỂM TRA SMART BANKING STEALTH TRƯỚC TIÊN (< 5ms):
-        // Nếu người dùng vừa chạm mở App Ngân hàng / VNeID và đang không trong cuộc gọi -> Tự động tắt Trợ năng ngay lập tức!
-        if (bankingStealthEnabled && !wasInActiveCall && isBankingPackage(pkgName)) {
-            lastDetectedApp = "Đã tự động TẮT Trợ năng cho App Ngân hàng ($pkgName)"
-            notifyForegroundGuardBankingStealth(pkgName)
-            disableSelf()
-            return
+        if (bankingStealthEnabled && !wasInActiveCall) {
+            // CƠ CHẾ 1 (QUAN TRỌNG NHẤT): Bắt ngay khoảnh khắc ngón tay chạm vào Icon App Ngân hàng trên Màn hình chính
+            // (Xảy ra trước khi tiến trình App Ngân hàng kịp khởi tạo Application.onCreate() 150ms!)
+            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                val clickedText = buildString {
+                    event.text?.forEach { append(it).append(" ") }
+                    if (event.contentDescription != null) append(event.contentDescription)
+                }
+                if (isBankingLabelClicked(clickedText)) {
+                    triggerInstantSelfDisable("Icon: ${clickedText.trim()}")
+                    return
+                }
+            }
+
+            // CƠ CHẾ 2: Bắt sự kiện chuyển cửa sổ của bất kỳ gói App Ngân hàng nào
+            if (pkgName.isNotEmpty() && isBankingPackage(pkgName)) {
+                triggerInstantSelfDisable(pkgName)
+                return
+            }
         }
 
-        // 2. Nếu là ứng dụng OTT hoặc cuộc gọi SIM
+        // 3. Nếu là ứng dụng OTT hoặc cuộc gọi SIM
         if (SUPPORTED_OTT_PACKAGES.containsKey(pkgName)) {
             currentForegroundOttApp = SUPPORTED_OTT_PACKAGES[pkgName]
             lastDetectedApp = currentForegroundOttApp ?: pkgName
@@ -155,11 +181,33 @@ class OTTCallAccessibilityService : AccessibilityService() {
         }
     }
 
+    fun triggerInstantSelfDisable(reason: String) {
+        lastDetectedApp = "Đã tắt Trợ năng để dùng Ngân hàng ($reason)"
+        notifyForegroundGuardBankingStealth(reason)
+        disableSelf()
+    }
+
     private fun notifyForegroundGuardBankingStealth(bankingPkg: String) {
         try {
             val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                 action = CallMonitorForegroundService.ACTION_BANKING_STEALTH_TRIGGERED
                 putExtra("bankingPkg", bankingPkg)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svcIntent)
+            } else {
+                startService(svcIntent)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun notifyForegroundGuardStatusChanged(enabled: Boolean, reason: String) {
+        try {
+            val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                action = CallMonitorForegroundService.ACTION_START_GUARD
+                putExtra("accEnabled", enabled)
+                putExtra("reason", reason)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(svcIntent)

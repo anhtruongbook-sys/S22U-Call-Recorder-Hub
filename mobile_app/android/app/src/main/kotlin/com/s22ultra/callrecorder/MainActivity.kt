@@ -77,6 +77,11 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "disableAccessibilityNow" -> {
+                        OTTCallAccessibilityService.instance?.triggerInstantSelfDisable("Nút 1-chạm trong App")
+                        result.success(true)
+                    }
+
                     "openSamsungCallSettings" -> {
                         try {
                             val intent = Intent().apply {
