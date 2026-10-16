@@ -8,12 +8,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Bộ quản lý đồng bộ và hợp nhất danh sách ghi âm trên Samsung Galaxy S22 Ultra:
- * 1. Quét thư mục ghi âm cuộc gọi SIM phần cứng của Samsung One UI (/Recordings/Call/ và /Call/)
- * 2. Quét thư mục ghi âm OTT (Zalo, Viber, Telegram, WhatsApp) của AudioDspRecorderEngine
- * 3. Hợp nhất và sắp xếp theo thời gian mới nhất.
- */
 class SamsungCallSyncManager(private val context: Context) {
 
     fun getSamsungNativeDirectories(): List<File> {
@@ -97,7 +91,7 @@ class SamsungCallSyncManager(private val context: Context) {
         val installedOtt = mutableListOf<String>()
         val pm = context.packageManager
 
-        OTTCallAccessibilityService.SUPPORTED_OTT_PACKAGES.forEach { (pkg, label) ->
+        CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.forEach { (pkg, label) ->
             try {
                 pm.getPackageInfo(pkg, 0)
                 if (!installedOtt.contains(label)) {

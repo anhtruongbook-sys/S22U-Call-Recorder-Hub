@@ -273,7 +273,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                 Text(
                   !micGranted
                       ? 'Chưa cấp quyền Microphone & Bộ nhớ để thu và đọc file ghi âm.'
-                      : 'Chưa bật Dịch vụ Trợ năng (Accessibility) để tự động thu âm Zalo, Viber, Telegram, WhatsApp.',
+                      : 'Chưa bật Chế độ Trực chiến Tự động (Foreground Audio Guard) cho Zalo, Viber, Telegram, WhatsApp.',
                   style: const TextStyle(fontSize: 12.5),
                 ),
                 const SizedBox(height: 8),
@@ -282,15 +282,21 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                   children: [
                     if (!micGranted)
                       FilledButton.tonalIcon(
-                        onPressed: () => _channel.invokeMethod('requestPermissions'),
+                        onPressed: () async {
+                          await _channel.invokeMethod('requestPermissions');
+                          await _refreshStatusOnly();
+                        },
                         icon: const Icon(Icons.mic, size: 17),
                         label: const Text('Cấp quyền Mic & Bộ nhớ'),
                       ),
                     if (!accEnabled)
                       FilledButton.icon(
-                        onPressed: () => _channel.invokeMethod('openAccessibilitySettings'),
-                        icon: const Icon(Icons.accessibility_new, size: 17),
-                        label: const Text('Bật Trợ Năng OTT'),
+                        onPressed: () async {
+                          await _channel.invokeMethod('openAccessibilitySettings');
+                          await _refreshStatusOnly();
+                        },
+                        icon: const Icon(Icons.shield_outlined, size: 17),
+                        label: const Text('Bật Trực Chiến OTT (1-Chạm)'),
                       ),
                   ],
                 ),
