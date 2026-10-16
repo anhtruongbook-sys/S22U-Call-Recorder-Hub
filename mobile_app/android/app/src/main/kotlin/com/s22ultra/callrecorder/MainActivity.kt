@@ -71,8 +71,8 @@ class MainActivity : FlutterActivity() {
                             ?: fallbackDspEngine
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
                         diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning ||
-                                OTTCallAccessibilityService.isServiceRunning
-                        diag["audioBridgeEnabled"] = OTTCallAccessibilityService.isServiceRunning
+                                OTTCallAccessibilityService.isServiceConnectedFlag
+                        diag["audioBridgeEnabled"] = OTTCallAccessibilityService.isServiceConnectedFlag
                         diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
