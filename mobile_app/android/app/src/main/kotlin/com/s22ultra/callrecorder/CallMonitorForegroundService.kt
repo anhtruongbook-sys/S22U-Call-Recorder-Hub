@@ -26,14 +26,12 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 
 /**
- * Dịch vụ Trực chiến Ghi âm v2.0.0 — Kiến trúc Ngắt Sự Kiện Phần Cứng (Zero-Polling Deep-Sleep Engine):
- * - CẮT BỎ 100% VÒNG LẶP QUÉT NGẦM (Không dùng Timer / Polling 800ms, Không giữ WakeLock, Không mở Mic khi chờ).
- * - Khi không có cuộc gọi: Ứng dụng NGỦ ĐÔNG 100% (0.0% CPU, 0% hao pin, máy vào Deep Sleep / Doze Mode bình thường).
- * - Chỉ thức dậy đúng khoảnh khắc Phần cứng Âm thanh phát tín hiệu ngắt (Hardware Interrupt):
- *   1. `AudioManager.OnModeChangedListener` (Android 12–16 Native Interrupt khi chuyển sang `MODE_IN_COMMUNICATION` / `MODE_IN_CALL`).
- *   2. `AudioManager.AudioRecordingCallback` (Ngắt phần cứng khi Zalo/Messenger/Telegram kích hoạt luồng thu âm VoIP).
- *   3. `OTTCallNotificationListener` (Sự kiện hệ thống khi có thông báo cuộc gọi OTT).
- * - KHÔNG SỬ DỤNG AccessibilityService -> An toàn 100% với mọi App Ngân hàng & VNeID 24/7.
+ * Dịch vụ Trực chiến Ghi âm v2.6.0 — Kiến trúc KHÔNG TRỢ NĂNG (Zero-Accessibility • 100% An Toàn Ngân Hàng):
+ * - CẮT BỎ 100% AccessibilityService (Các App Ngân hàng VCB, BIDV, Techcombank, MB, VietinBank, VNeID chạy mượt 100% 24/7).
+ * - Khởi mở luồng `VOICE_RECOGNITION` ngay tức khắc ở `0ms` khi có ngắt phần cứng `OnModeChangedListener` (giống hệt cơ chế
+ *   đã thu được tiếng của bản v2.0.0, không bị trễ nhịp làm mất quyền Mic vào tay Zalo).
+ * - Kết hợp Cổng Chờ Nhấc Máy (`Pre-Roll Answer Gate`) trong `AudioDspRecorderEngine`: Không ghi đoạn chờ đổ chuông vào file `.wav`,
+ *   chỉ bắt đầu ghi từ lúc đầu dây nhấc máy nói "Alo"!
  */
 class CallMonitorForegroundService : Service() {
 
@@ -68,7 +66,7 @@ class CallMonitorForegroundService : Service() {
         var disableMode: String = "NONE"
 
         @Volatile
-        var lastDetectedApp: String = "Ngủ đông chờ sự kiện (0.0% CPU • An toàn Ngân hàng 24/7)"
+        var lastDetectedApp: String = "Ngủ đông chờ sự kiện (0.0% CPU • Không dùng Trợ năng)"
 
         val SUPPORTED_OTT_PACKAGES = mapOf(
             "com.zing.zalo" to "Zalo",
@@ -122,44 +120,16 @@ class CallMonitorForegroundService : Service() {
     private var audioAnchorView: View? = null
     private var callbacksRegistered = false
 
-    fun getActiveEngine(): AudioDspRecorderEngine {
-        return OTTCallAccessibilityService.instance?.dspEngine ?: dspEngine
-    }
-
-    private val callStartRunnable = Runnable {
-        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
-        val mode = am.mode
-        // Chỉ ghi âm khi:
-        // 1. Đang ở chế độ đàm thoại (MODE_IN_COMMUNICATION hoặc MODE_IN_CALL)
-        // 2. KHÔNG PHẢI đang đổ chuông / chờ nhấc máy (!OTTCallNotificationListener.isCallRingingOrDialing)
-        val isConnectedCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL) &&
-                !OTTCallNotificationListener.isCallRingingOrDialing
-        val engine = getActiveEngine()
-        if (isConnectedCall && autoRecordOttEnabled && !engine.isRecording) {
-            wasInActiveCall = true
-            attachCallAudioAnchorIfPermitted()
-            val tag = resolveActiveCallTag(mode)
-            lastDetectedApp = "$tag (Đã nhấc máy • Đang ghi âm)"
-            engine.startRecording(
-                appTag = tag,
-                remoteGainBoost = remoteGainBoost,
-                autoBoostEarpieceVolume = autoBoostVolume
-            )
-            updateNotification("ĐANG GHI ÂM $tag (Chỉ ghi từ lúc nhấc máy)...", true)
-        }
-    }
-
     private val callEndRunnable = Runnable {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
         val mode = am.mode
         val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
-        val engine = getActiveEngine()
-        if (!isStillCall) {
+        if (!isStillCall && wasInActiveCall) {
             wasInActiveCall = false
             OTTCallNotificationListener.isCallRingingOrDialing = false
             OTTCallNotificationListener.isCallAnswered = false
-            if (engine.isRecording && engine.currentAppTag != "Manual") {
-                val saved = engine.stopRecording()
+            if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
+                val saved = dspEngine.stopRecording()
                 detachCallAudioAnchor()
                 val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
                 lastDetectedApp =
@@ -174,10 +144,8 @@ class CallMonitorForegroundService : Service() {
         }
     }
 
-    // 1. Ngắt phần cứng Audio Mode (API 31+ / Android 12–16): 0% CPU khi nghỉ, chỉ gọi khi đổi trạng thái cuộc gọi
     private var modeChangedListener: AudioManager.OnModeChangedListener? = null
 
-    // 2. Ngắt phần cứng Audio Recording Config (API 24+): Chỉ gọi khi ứng dụng VoIP bắt đầu/kết thúc thu mic
     private val recordingCallback = object : AudioManager.AudioRecordingCallback() {
         override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
             super.onRecordingConfigChanged(configs)
@@ -200,10 +168,6 @@ class CallMonitorForegroundService : Service() {
         registerZeroBatteryHardwareCallbacks()
     }
 
-    /**
-     * Đăng ký nhận tín hiệu Ngắt Phần Cứng (Hardware Interrupt) từ hệ điều hành Android:
-     * Hoàn toàn KHÔNG chạy bất kỳ vòng lặp kiểm tra (Timer/Polling) nào -> 0.0% CPU khi chờ!
-     */
     private fun registerZeroBatteryHardwareCallbacks() {
         if (callbacksRegistered) return
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -256,7 +220,7 @@ class CallMonitorForegroundService : Service() {
 
         if (!isGuardRunning) {
             val notif = buildNotification(
-                contentText = "Chế độ Ngủ Đông (0.0% CPU) • Tự thức dậy khi có cuộc gọi",
+                contentText = "Chế độ Ngủ Đông (0.0% CPU • Không dùng Trợ năng)",
                 recordingNow = false
             )
             try {
@@ -276,7 +240,7 @@ class CallMonitorForegroundService : Service() {
                 isGuardRunning = true
                 disableMode = "NONE"
                 lastDetectedApp =
-                    "Ngủ đông chờ sự kiện (0.0% CPU • An toàn Ngân hàng 24/7)"
+                    "Ngủ đông chờ sự kiện (0.0% CPU • Không dùng Trợ năng)"
                 registerZeroBatteryHardwareCallbacks()
             } catch (_: Exception) {
             }
@@ -287,11 +251,11 @@ class CallMonitorForegroundService : Service() {
                 disableMode = "NONE"
                 autoRecordOttEnabled = true
                 lastDetectedApp =
-                    "Ngủ đông chờ sự kiện (0.0% CPU • An toàn Ngân hàng 24/7)"
+                    "Ngủ đông chờ sự kiện (0.0% CPU • Không dùng Trợ năng)"
                 registerZeroBatteryHardwareCallbacks()
                 evaluateAudioHardwareInterrupt()
                 updateNotification(
-                    contentText = "Chế độ Ngủ Đông (0.0% CPU) • Tự thức dậy khi có cuộc gọi",
+                    contentText = "Chế độ Ngủ Đông (0.0% CPU • Không dùng Trợ năng)",
                     recordingNow = dspEngine.isRecording
                 )
             }
@@ -301,27 +265,25 @@ class CallMonitorForegroundService : Service() {
             }
 
             ACTION_QUICK_RECORD -> {
-                val engine = getActiveEngine()
-                if (!engine.isRecording) {
+                if (!dspEngine.isRecording) {
                     attachCallAudioAnchorIfPermitted()
                     val detectedTag = resolveActiveCallTag(AudioManager.MODE_IN_COMMUNICATION)
-                    engine.startRecording(
+                    dspEngine.startRecording(
                         appTag = detectedTag,
                         remoteGainBoost = remoteGainBoost,
                         autoBoostEarpieceVolume = autoBoostVolume
                     )
                     lastDetectedApp = "$detectedTag (Đang ghi âm)"
                     updateNotification(
-                        contentText = "ĐANG GHI ÂM $detectedTag (48kHz Broadcast AGC)...",
+                        contentText = "ĐANG GHI ÂM $detectedTag (48kHz Smooth DSP)...",
                         recordingNow = true
                     )
                 }
             }
 
             ACTION_STOP_RECORD -> {
-                val engine = getActiveEngine()
-                if (engine.isRecording) {
-                    val saved = engine.stopRecording()
+                if (dspEngine.isRecording) {
+                    val saved = dspEngine.stopRecording()
                     detachCallAudioAnchor()
                     val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
                     lastDetectedApp =
@@ -337,11 +299,6 @@ class CallMonitorForegroundService : Service() {
         return START_STICKY
     }
 
-    /**
-     * Gắn điểm neo cửa sổ 1x1 trong suốt CHỈ TRONG LÚC ĐANG CÓ CUỘC GỌI để Android 16 cấp quyền
-     * thu âm Microphone song song (`hasOverlayUi = true`) cùng với Zalo/Viber/Telegram/WhatsApp.
-     * Khi không có cuộc gọi (hoặc khi mở App Ngân hàng), điểm neo này KHÔNG tồn tại (0% GPU/RAM).
-     */
     private fun attachCallAudioAnchorIfPermitted() {
         if (audioAnchorView != null || !hasOverlayPermission(this)) return
         try {
@@ -422,31 +379,35 @@ class CallMonitorForegroundService : Service() {
     }
 
     /**
-     * Hàm này CHỈ ĐƯỢC GỌI khi có sự kiện ngắt phần cứng (Hardware Interrupt) từ hệ điều hành.
-     * Tuyệt đối không chạy định kỳ -> 0.0% CPU khi máy rảnh!
+     * Khởi mở ngay tức khắc ở 0ms (giống hệt v2.0.0) để giữ quyền thu VOICE_RECOGNITION trước khi Zalo khóa Mic,
+     * đồng thời cập nhật tên người gọi Tiếng Việt (`updateActiveCallTag`) khi thông báo Zalo gửi tới.
      */
     fun evaluateAudioHardwareInterrupt() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val mode = am.mode
         val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
-        val engine = getActiveEngine()
 
         if (isCall) {
             mainHandler.removeCallbacks(callEndRunnable)
-            if (OTTCallNotificationListener.isCallRingingOrDialing) {
-                // Đang đổ chuông / chờ đầu dây nhấc máy -> tuyệt đối chưa bật ghi âm!
-                mainHandler.removeCallbacks(callStartRunnable)
-            } else if (!engine.isRecording) {
-                // Đã nhấc máy -> chờ 900ms để luồng thoại ổn định rồi bắt đầu thu âm
-                mainHandler.removeCallbacks(callStartRunnable)
-                mainHandler.postDelayed(callStartRunnable, 900L)
+            val tag = resolveActiveCallTag(mode)
+            if (!wasInActiveCall || !dspEngine.isRecording) {
+                wasInActiveCall = true
+                if (autoRecordOttEnabled && !dspEngine.isRecording) {
+                    attachCallAudioAnchorIfPermitted()
+                    lastDetectedApp = "$tag (Đang ghi âm tự động)"
+                    dspEngine.startRecording(
+                        appTag = tag,
+                        remoteGainBoost = remoteGainBoost,
+                        autoBoostEarpieceVolume = autoBoostVolume
+                    )
+                    updateNotification("ĐANG GHI ÂM $tag (Chỉ lưu từ lúc nhấc máy)...", true)
+                }
+            } else if (dspEngine.isRecording) {
+                dspEngine.updateActiveCallTag(tag)
             }
-        } else if (mode != AudioManager.MODE_RINGTONE) {
-            mainHandler.removeCallbacks(callStartRunnable)
-            if (wasInActiveCall || engine.isRecording) {
-                mainHandler.removeCallbacks(callEndRunnable)
-                mainHandler.postDelayed(callEndRunnable, 1800L)
-            }
+        } else if (mode != AudioManager.MODE_RINGTONE && wasInActiveCall) {
+            mainHandler.removeCallbacks(callEndRunnable)
+            mainHandler.postDelayed(callEndRunnable, 1800L)
         }
     }
 
@@ -478,7 +439,7 @@ class CallMonitorForegroundService : Service() {
         )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("S22U Call Recorder (Zero-Polling 0% Pin)")
+            .setContentTitle("S22U Call Recorder (Không Trợ Năng • 0% Pin)")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingLaunch)
@@ -521,8 +482,6 @@ class CallMonitorForegroundService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Khi người dùng vuốt đóng App khỏi màn hình Đa nhiệm (Recent Apps):
-        // Nếu không phải tắt chủ động trong App, giữ nguyên dịch vụ Ngủ Đông để có cuộc gọi vẫn tự kích hoạt 100%!
         if (disableMode != "MANUAL_OFF") {
             try {
                 val restartIntent = Intent(applicationContext, CallMonitorForegroundService::class.java).apply {

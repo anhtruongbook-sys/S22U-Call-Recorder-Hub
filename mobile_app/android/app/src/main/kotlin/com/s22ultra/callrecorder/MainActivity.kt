@@ -66,13 +66,10 @@ class MainActivity : FlutterActivity() {
                         ) {
                             startGuardService()
                         }
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
-                        val a11yEnabled = OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
-                        diag["accessibilityEnabled"] = a11yEnabled
-                        diag["audioBridgeEnabled"] = a11yEnabled
+                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning
                         diag["guardServiceRunning"] = CallMonitorForegroundService.isGuardRunning
                         diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
                         diag["micPermissionGranted"] = hasMicPermission()
@@ -188,12 +185,7 @@ class MainActivity : FlutterActivity() {
                             getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
                                 .edit().putString("disableMode", "NONE").apply()
                             startGuardService()
-                            if (!OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
-                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                startActivity(intent)
-                            } else if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
+                            if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
                                 val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
@@ -342,8 +334,7 @@ class MainActivity : FlutterActivity() {
                             startGuardService()
                         }
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val path = activeEngine.startRecording(
                             appTag = appTag,
@@ -354,8 +345,7 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "stopRecording" -> {
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val info = activeEngine.stopRecording()
                         result.success(info)

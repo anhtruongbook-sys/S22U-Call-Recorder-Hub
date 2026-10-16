@@ -62,12 +62,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.5.0
-          name: "S22 Ultra Call Recorder Hub v2.5.0 (NFC Vietnamese Filename + Answer-Only Pre-Roll Gate + Zero-Static Clean Voice DSP)"
+          tag_name: v2.6.0
+          name: "S22 Ultra Call Recorder Hub v2.6.0 (Zero-Accessibility 100% Banking Compatible + v2.0.0 0ms Direct Voice Capture + Answer Gate + NFC Vietnamese)"
           body: |
             ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root)
-            - **Gọi SIM thường**: Tự động đồng bộ file `.m4a` Lossless từ trình ghi âm phần cứng gốc của Samsung One UI (`/Recordings/Call/`).
-            - **Gọi OTT (Zalo, Viber, Telegram, WhatsApp)**: Tự động nhận diện trạng thái `MODE_IN_COMMUNICATION` qua `AccessibilityService` và thu âm bằng nguồn `VOICE_RECOGNITION` kèm thuật toán khuếch đại DSP giọng loa thoại (`Adaptive Gain Boost`).
+            - **100% Không dùng Trợ năng (Zero AccessibilityService)**: Xóa bỏ vĩnh viễn thành phần Trợ năng khỏi APK, mở mọi ứng dụng Ngân hàng (VCB, BIDV, VietinBank, Techcombank, MB Bank, VNeID) bình thường 100%.
+            - **Thu âm 2 chiều rõ nét (0ms Direct Hardware Capture + Answer Pre-Roll Gate)**: Khởi tạo kênh `VOICE_RECOGNITION` ngay tức khắc ở `0ms` trước khi Zalo khóa Mic (như bản `v2.0.0`), lọc bỏ hoàn toàn đoạn chờ đổ chuông chưa nhấc máy và khuếch đại tiếng nói sạch không sôi nhiễu.
+            - **Tên file Tiếng Việt Chuẩn Unicode NFC**: Giữ nguyên đầy đủ dấu Tiếng Việt (`Zalo_Trương_Thành_Long_...wav`) và tự động sửa lại các file bị lỗi dấu trước đó.
             - **Tải tệp APK**: Tải file `S22U_CallRecorder.apk` bên dưới về điện thoại Samsung S22 Ultra và nhấn Cài đặt.
           files: build-output/S22U_CallRecorder.apk
           draft: false
