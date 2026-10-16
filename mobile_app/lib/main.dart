@@ -325,9 +325,13 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
   List<Map<String, dynamic>> get _filteredRecordings {
     if (_selectedFilter == 'ALL') return _recordings;
     if (_selectedFilter == 'SIM') {
-      return _recordings.where((r) => (r['sourceType'] ?? '').toString().contains('SIM')).toList();
+      return _recordings
+          .where((r) => ((r['sourceType'] ?? r['category'] ?? '').toString().contains('SIM')))
+          .toList();
     }
-    return _recordings.where((r) => (r['sourceType'] ?? '').toString().contains('OTT')).toList();
+    return _recordings
+        .where((r) => ((r['sourceType'] ?? r['category'] ?? '').toString().contains('OTT')))
+        .toList();
   }
 
   String _formatBytes(int bytes) {
@@ -349,7 +353,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final isRecording = _status['isRecording'] == true;
     final peakAmp = (_status['peakAmplitude'] as num?)?.toInt() ?? 0;
     final autoOtt = _status['autoRecordOttEnabled'] ?? true;
-    final autoVol = _status['autoBoostVolume'] ?? true;
+    final autoVol = _status['autoBoostVolume'] ?? false;
     final gainBoost = ((_status['remoteGainBoost'] as num?)?.toDouble() ?? 2.2).clamp(1.0, 4.0);
     final model = (_status['model'] ?? 'SM-S908U').toString();
     final androidVer = (_status['androidRelease'] ?? '16').toString();
@@ -870,10 +874,12 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
   ) {
     final path = (item['path'] ?? '').toString();
     final name = (item['name'] ?? 'Unknown').toString();
-    final appTag = (item['appTag'] ?? 'Call').toString();
-    final sourceType = (item['sourceType'] ?? '').toString();
+    final appTag = (item['appTag'] ?? item['source'] ?? 'Call').toString();
+    final sourceType = (item['sourceType'] ?? item['category'] ?? '').toString();
     final dateFormatted = (item['dateFormatted'] ?? '').toString();
-    final sizeBytes = (item['sizeBytes'] as num?)?.toInt() ?? 0;
+    final rawBytes = (item['sizeBytes'] as num?)?.toInt();
+    final rawKB = (item['sizeKB'] as num?)?.toInt();
+    final sizeBytes = rawBytes ?? ((rawKB ?? 0) * 1024);
     final isPlaying = playingPath == path && path.isNotEmpty;
     final isSim = sourceType.contains('SIM');
 
@@ -934,7 +940,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                   await _refreshStatusOnly();
                 },
                 icon: Icon(isPlaying ? Icons.stop : Icons.play_arrow, size: 16),
-                label: Text(isPlaying ? 'Dừng nghe' : 'Nghe (+9dB)', style: const TextStyle(fontSize: 12)),
+                label: Text(isPlaying ? 'Dừng nghe' : 'Nghe (Lọc ồn)', style: const TextStyle(fontSize: 12)),
               ),
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
@@ -975,13 +981,13 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     required List<String> installedOtt,
   }) {
     final cs = Theme.of(context).colorScheme;
-    final actualBoostMultiplier = (4.0 + gainBoost * 3.8).toStringAsFixed(1);
+    final actualBoostMultiplier = (2.0 + gainBoost * 1.45).toStringAsFixed(1);
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
         const Text(
-          'Động Cơ Ghi Âm Ngắt Phần Cứng (Không Dùng Trợ Năng • 0% Pin Khi Chờ)',
+          'Động Cơ Ghi Âm Lọc Ồn Giọng Nói (260Hz–3600Hz • 0% Pin Khi Chờ)',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 6),
@@ -992,8 +998,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
             border: const Border(left: BorderSide(color: Colors.greenAccent, width: 3.5)),
           ),
           child: const Text(
-            '• KHÔNG SỬ DỤNG Trợ năng (Zero-Accessibility): Bạn mở VCB Digibank, MB Bank, BIDV, Techcombank, VNeID 24/7 thoải mái mà không bao giờ bị chặn.\n'
-            '• TỰ ĐỘNG KÍCH HOẠT KỂ CẢ KHI ĐÃ TẮT APP: Dù bạn vuốt đóng hoàn toàn ứng dụng khỏi màn hình Đa nhiệm, ngay khi có cuộc gọi Zalo/Viber/Telegram/WhatsApp/Messenger hoặc SIM, hệ thống vẫn tự động thức dậy ghi âm 100%.',
+            '• LOA NGHE GỌI TRONG TRẺO 100%: Không can thiệp vào bộ khử tiếng vang phần cứng của máy, trễ 800ms để Zalo/SIM khóa xong bộ lọc ồn loa thoại trước khi thu âm.\n'
+            '• CỔNG CHỐNG ỒN THÍCH ỨNG (Adaptive Noise-Floor Gate): Tự động cắt bỏ tiếng ồn phòng (< 260Hz & > 3600Hz), chỉ khuếch đại khi có tiếng người nói thực sự.',
             style: TextStyle(fontSize: 12.5, height: 1.45),
           ),
         ),
@@ -1002,7 +1008,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
           contentPadding: EdgeInsets.zero,
           title: const Text('Tự động ghi âm cuộc gọi OTT & SIM (24/7)'),
           subtitle: const Text(
-            'Tự động thức dậy từ chế độ Ngủ Đông (0.0% CPU) ngay khi chip âm thanh chuyển sang MODE_IN_COMMUNICATION hoặc MODE_IN_CALL.',
+            'Tự động thức dậy từ chế độ Ngủ Đông (0.0% CPU) kể cả khi đã vuốt đóng App.',
           ),
           value: autoOtt,
           onChanged: (v) => _updateDspSettings(autoRecordOtt: v),
@@ -1010,9 +1016,9 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         const Divider(),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
-          title: const Text('Tự động nâng âm lượng loa thoại S22 Ultra lên 88%'),
+          title: const Text('Hỗ trợ nâng nhẹ loa thoại lên 65% (Mặc định: TẮT)'),
           subtitle: const Text(
-            'Giúp loa thoại phía trên truyền âm thanh đầu dây bên kia sang Microphone to và rõ nhất mà không cần bật loa ngoài.',
+            'Khuyên để TẮT để giữ nguyên âm lượng loa nghe cuộc gọi êm ái mặc định của bạn.',
           ),
           value: autoVol,
           onChanged: (v) => _updateDspSettings(autoBoostVolume: v),
@@ -1024,12 +1030,12 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
           children: [
             const Expanded(
               child: Text(
-                'Độ nhạy Khuếch đại Phát thanh (Broadcast Pre-Amp & Peak Normalizer)',
+                'Độ khuếch đại Dải giọng nói (Adaptive Voice-Band Gain)',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
               ),
             ),
             Text(
-              '${actualBoostMultiplier}x (~88% Max)',
+              '${actualBoostMultiplier}x (Chống ồn nền)',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 color: cs.primary,
@@ -1040,8 +1046,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         ),
         const SizedBox(height: 4),
         Text(
-          'Tầng 1: Kéo biên độ giọng nói mục tiêu lên 22.000 (-3.4 dBFS) với hệ số khuếch đại lên tới ${actualBoostMultiplier}x.\n'
-          'Tầng 2: Tự động chuẩn hóa đỉnh sóng (Lossless Peak Normalization) lên 28.500 (-1.2 dBFS) ngay khi kết thúc cuộc gọi.',
+          'Khi không có người nói (ồn nền < 500): Giữ mức 0.85x (êm ru không sôi nền).\n'
+          'Khi có giọng nói (260Hz–3600Hz): Khuếch đại mượt lên ${actualBoostMultiplier}x.',
           style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
         ),
         Slider(

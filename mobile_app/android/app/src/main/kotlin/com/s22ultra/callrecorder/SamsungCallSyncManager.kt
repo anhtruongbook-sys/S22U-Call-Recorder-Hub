@@ -33,13 +33,16 @@ class SamsungCallSyncManager(private val context: Context) {
         val seenNames = mutableSetOf<String>()
         val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
 
-        // Tự động sao lưu các file từ thư mục nội bộ sang thư mục công cộng /Download/S22U_Call_Recordings/
+        // Tự động sao lưu các file hợp lệ (> 44 bytes) từ thư mục nội bộ sang thư mục công cộng /Download/S22U_Call_Recordings/
         try {
             val internalDir = dspEngine.getInternalFallbackDir()
             if (internalDir.exists()) {
                 internalDir.listFiles()?.forEach { f ->
-                    if (f.isFile && (f.name.endsWith(".wav", true) || f.name.endsWith(".m4a", true))) {
+                    if (f.isFile && f.length() > 44L && (f.name.endsWith(".wav", true) || f.name.endsWith(".m4a", true))) {
                         dspEngine.mirrorToPermanentPublicStorage(f)
+                    } else if (f.isFile && f.length() <= 44L && !dspEngine.isRecording) {
+                        // Tự động dọn file rỗng 0B do ngắt nhầm
+                        f.delete()
                     }
                 }
             }
@@ -50,7 +53,15 @@ class SamsungCallSyncManager(private val context: Context) {
         for (ottDir in getOttDirectories(dspEngine)) {
             if (ottDir.exists() && ottDir.canRead()) {
                 ottDir.listFiles()?.forEach { file ->
+                    if (file.isFile && file.length() <= 44L && !dspEngine.isRecording) {
+                        try {
+                            file.delete()
+                        } catch (_: Exception) {
+                        }
+                        return@forEach
+                    }
                     if (file.isFile &&
+                        file.length() > 44L &&
                         !seenNames.contains(file.name) &&
                         (file.name.endsWith(".wav", true) || file.name.endsWith(".m4a", true))
                     ) {
@@ -61,15 +72,21 @@ class SamsungCallSyncManager(private val context: Context) {
                             prefix.contains("Viber", true) -> "Viber"
                             prefix.contains("Telegram", true) -> "Telegram"
                             prefix.contains("WhatsApp", true) -> "WhatsApp"
+                            prefix.contains("Messenger", true) -> "Messenger"
+                            prefix.contains("SIM", true) -> "SIM_Call"
                             else -> prefix
                         }
+                        val lenBytes = file.length()
                         results.add(
                             mapOf(
                                 "name" to file.name,
                                 "path" to file.absolutePath,
+                                "appTag" to appSource,
                                 "source" to appSource,
+                                "sourceType" to "OTT_VOIP",
                                 "category" to "OTT_VOIP",
-                                "sizeKB" to (file.length() / 1024L).coerceAtLeast(1L),
+                                "sizeBytes" to lenBytes,
+                                "sizeKB" to (lenBytes / 1024L).coerceAtLeast(1L),
                                 "lastModifiedMs" to file.lastModified(),
                                 "dateFormatted" to dateFormat.format(Date(file.lastModified())),
                                 "sha256Short" to dspEngine.computeSha256(file).take(16)
@@ -85,6 +102,7 @@ class SamsungCallSyncManager(private val context: Context) {
             if (dir.exists() && dir.canRead()) {
                 dir.listFiles()?.forEach { file ->
                     if (file.isFile &&
+                        file.length() > 0L &&
                         !seenNames.contains(file.name) &&
                         (file.name.endsWith(".m4a", true) ||
                                 file.name.endsWith(".amr", true) ||
@@ -92,13 +110,17 @@ class SamsungCallSyncManager(private val context: Context) {
                                 file.name.endsWith(".mp3", true))
                     ) {
                         seenNames.add(file.name)
+                        val lenBytes = file.length()
                         results.add(
                             mapOf(
                                 "name" to file.name,
                                 "path" to file.absolutePath,
+                                "appTag" to "SIM Samsung",
                                 "source" to "SIM (Samsung Gốc)",
+                                "sourceType" to "CELLULAR_SIM",
                                 "category" to "CELLULAR_SIM",
-                                "sizeKB" to (file.length() / 1024L).coerceAtLeast(1L),
+                                "sizeBytes" to lenBytes,
+                                "sizeKB" to (lenBytes / 1024L).coerceAtLeast(1L),
                                 "lastModifiedMs" to file.lastModified(),
                                 "dateFormatted" to dateFormat.format(Date(file.lastModified())),
                                 "sha256Short" to dspEngine.computeSha256(file).take(16)

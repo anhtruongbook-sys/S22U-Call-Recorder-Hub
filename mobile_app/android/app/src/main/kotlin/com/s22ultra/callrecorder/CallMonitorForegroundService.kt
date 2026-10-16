@@ -62,7 +62,7 @@ class CallMonitorForegroundService : Service() {
         var remoteGainBoost: Float = 2.2f
 
         @Volatile
-        var autoBoostVolume: Boolean = true
+        var autoBoostVolume: Boolean = false
 
         @Volatile
         var disableMode: String = "NONE"
@@ -122,6 +122,46 @@ class CallMonitorForegroundService : Service() {
     private var audioAnchorView: View? = null
     private var callbacksRegistered = false
 
+    private val callStartRunnable = Runnable {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
+        val mode = am.mode
+        val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        if (isStillCall && autoRecordOttEnabled && !dspEngine.isRecording) {
+            wasInActiveCall = true
+            attachCallAudioAnchorIfPermitted()
+            val tag = resolveActiveCallTag(mode)
+            lastDetectedApp = "$tag (Đang ghi âm tự động)"
+            dspEngine.startRecording(
+                appTag = tag,
+                remoteGainBoost = remoteGainBoost,
+                autoBoostEarpieceVolume = autoBoostVolume
+            )
+            updateNotification("ĐANG GHI ÂM $tag (Lọc ồn 280Hz-3600Hz)...", true)
+        }
+    }
+
+    private val callEndRunnable = Runnable {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
+        val mode = am.mode
+        val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        if (!isStillCall && wasInActiveCall) {
+            wasInActiveCall = false
+            if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
+                val saved = dspEngine.stopRecording()
+                detachCallAudioAnchor()
+                val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
+                lastDetectedApp =
+                    "$savedTag (Đã lưu • Đang Ngủ Đông 0.0% CPU)"
+                updateNotification(
+                    "Đã lưu $savedTag • Đang Ngủ Đông (0.0% CPU)",
+                    false
+                )
+            } else {
+                detachCallAudioAnchor()
+            }
+        }
+    }
+
     // 1. Ngắt phần cứng Audio Mode (API 31+ / Android 12–16): 0% CPU khi nghỉ, chỉ gọi khi đổi trạng thái cuộc gọi
     private var modeChangedListener: AudioManager.OnModeChangedListener? = null
 
@@ -141,7 +181,7 @@ class CallMonitorForegroundService : Service() {
         val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
         autoRecordOttEnabled = prefs.getBoolean("autoRecordOttEnabled", true)
         remoteGainBoost = prefs.getFloat("remoteGainBoost", 2.2f)
-        autoBoostVolume = prefs.getBoolean("autoBoostVolume", true)
+        autoBoostVolume = prefs.getBoolean("autoBoostVolume", false)
         disableMode = prefs.getString("disableMode", "NONE") ?: "NONE"
         dspEngine = AudioDspRecorderEngine(applicationContext)
         createNotificationChannel()
@@ -376,33 +416,19 @@ class CallMonitorForegroundService : Service() {
         val mode = am.mode
         val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
 
-        if (isCall && !wasInActiveCall) {
-            wasInActiveCall = true
-            if (autoRecordOttEnabled && !dspEngine.isRecording) {
-                attachCallAudioAnchorIfPermitted()
-                val tag = resolveActiveCallTag(mode)
-                lastDetectedApp = "$tag (Đang ghi âm tự động)"
-                dspEngine.startRecording(
-                    appTag = tag,
-                    remoteGainBoost = remoteGainBoost,
-                    autoBoostEarpieceVolume = autoBoostVolume
-                )
-                updateNotification("ĐANG GHI ÂM $tag (48kHz Smooth DSP)...", true)
+        if (isCall) {
+            mainHandler.removeCallbacks(callEndRunnable)
+            if (!wasInActiveCall && !dspEngine.isRecording) {
+                // Chờ 800ms để Zalo / Điện thoại Samsung khóa xong bộ khử ồn loa thoại phần cứng trước khi mở Mic phụ
+                mainHandler.removeCallbacks(callStartRunnable)
+                mainHandler.postDelayed(callStartRunnable, 800L)
             }
-        } else if (!isCall && wasInActiveCall) {
-            wasInActiveCall = false
-            if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
-                val saved = dspEngine.stopRecording()
-                detachCallAudioAnchor()
-                val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
-                lastDetectedApp =
-                    "$savedTag (Đã lưu • Đang Ngủ Đông 0.0% CPU)"
-                updateNotification(
-                    "Đã lưu $savedTag • Đang Ngủ Đông (0.0% CPU)",
-                    false
-                )
-            } else {
-                detachCallAudioAnchor()
+        } else {
+            mainHandler.removeCallbacks(callStartRunnable)
+            if (wasInActiveCall) {
+                // Chờ 2200ms chống ngắt nhầm khi chuyển trạng thái loa trong cuộc gọi
+                mainHandler.removeCallbacks(callEndRunnable)
+                mainHandler.postDelayed(callEndRunnable, 2200L)
             }
         }
     }

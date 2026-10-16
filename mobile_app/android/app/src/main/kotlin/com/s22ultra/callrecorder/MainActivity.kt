@@ -46,7 +46,7 @@ class MainActivity : FlutterActivity() {
         val recPrefs = getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
         CallMonitorForegroundService.autoRecordOttEnabled = recPrefs.getBoolean("autoRecordOttEnabled", true)
         CallMonitorForegroundService.remoteGainBoost = recPrefs.getFloat("remoteGainBoost", 2.2f)
-        CallMonitorForegroundService.autoBoostVolume = recPrefs.getBoolean("autoBoostVolume", true)
+        CallMonitorForegroundService.autoBoostVolume = recPrefs.getBoolean("autoBoostVolume", false)
         CallMonitorForegroundService.disableMode = recPrefs.getString("disableMode", "NONE") ?: "NONE"
 
         if (hasMicPermission() &&
@@ -565,7 +565,7 @@ class MainActivity : FlutterActivity() {
                 prepare()
                 try {
                     loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
-                        setTargetGain(900)
+                        setTargetGain(200)
                         enabled = true
                     }
                 } catch (_: Exception) {
