@@ -97,6 +97,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
             }
             CallMonitorForegroundService.lastDetectedApp = "Phát hiện cuộc gọi: $appName ($title)"
             ensureForegroundGuardRunning()
+            CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
         }
     }
 
@@ -107,11 +108,13 @@ class OTTCallNotificationListener : NotificationListenerService() {
             if (sbn.isOngoing || sbn.notification?.category == Notification.CATEGORY_CALL) {
                 currentActiveOttTag = null
                 currentCallerTitle = ""
+                CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
             }
         }
     }
 
     private fun ensureForegroundGuardRunning() {
+        if (CallMonitorForegroundService.disableMode == "MANUAL_OFF") return
         if (!CallMonitorForegroundService.isGuardRunning) {
             try {
                 val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {

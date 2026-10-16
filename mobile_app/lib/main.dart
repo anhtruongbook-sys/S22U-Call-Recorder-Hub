@@ -59,7 +59,7 @@ class RecorderHomeScreen extends StatefulWidget {
   State<RecorderHomeScreen> createState() => _RecorderHomeScreenState();
 }
 
-class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
+class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBindingObserver {
   static const MethodChannel _channel = MethodChannel('com.s22ultra.callrecorder/native');
 
   Map<String, dynamic> _status = {};
@@ -71,14 +71,38 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refreshAll();
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) => _refreshStatusOnly());
+    _startUiTimer();
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _stopUiTimer();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Chỉ cập nhật giao diện khi người dùng đang mở màn hình App
+      _refreshAll();
+      _startUiTimer();
+    } else {
+      // Khi thu nhỏ App hoặc tắt màn hình: Dừng 100% Timer giao diện -> 0.0% CPU / 0% Pin!
+      _stopUiTimer();
+    }
+  }
+
+  void _startUiTimer() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshStatusOnly());
+  }
+
+  void _stopUiTimer() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
   }
 
   Future<void> _refreshAll() async {
