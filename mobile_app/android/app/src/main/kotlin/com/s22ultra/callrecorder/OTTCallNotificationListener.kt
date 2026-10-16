@@ -55,21 +55,29 @@ class OTTCallNotificationListener : NotificationListenerService() {
         )
 
         private val RINGING_OR_DIALING_KEYWORDS = listOf(
-            "đang gọi",
             "đang đổ chuông",
             "đổ chuông",
             "cuộc gọi đến",
             "cuộc gọi thoại đến",
             "cuộc gọi video đến",
             "đang kết nối",
-            "đang chờ",
-            "calling",
             "ringing",
             "incoming call",
             "incoming voice call",
             "incoming video call",
             "connecting",
             "dialing"
+        )
+
+        private val ACTIVE_CONVERSATION_KEYWORDS = listOf(
+            "đang gọi thoại",
+            "đang gọi video",
+            "cuộc gọi thoại",
+            "cuộc gọi video",
+            "đang trong cuộc gọi",
+            "cuộc gọi đang diễn ra",
+            "ongoing call",
+            "in a call"
         )
 
         fun sanitizeVietnameseText(input: String): String {
@@ -193,28 +201,32 @@ class OTTCallNotificationListener : NotificationListenerService() {
         if (isCallRelated) {
             val cleanCaller = sanitizeVietnameseText(title)
             currentCallerTitle = cleanCaller
-            currentActiveOttTag = if (cleanCaller.isNotEmpty() && !cleanCaller.equals(appName, ignoreCase = true)) {
+            val newTag = if (cleanCaller.isNotEmpty() && !cleanCaller.equals(appName, ignoreCase = true)) {
                 "${appName}_$cleanCaller"
             } else {
                 appName
             }
+            currentActiveOttTag = newTag
 
-            // Kiểm tra xem cuộc gọi đang ở giai đoạn ĐỔ CHUÔNG / CHƯA NHẤC MÁY hay ĐÃ NHẤC MÁY:
-            val hasRingingKeyword = RINGING_OR_DIALING_KEYWORDS.any { kw -> textLower.contains(kw) }
-            if (showChronometer || hasTimerPattern) {
-                // Có bộ đếm thời gian cuộc gọi -> Chắc chắn 100% ĐÃ NHẤC MÁY!
+            val hasActiveKeyword = ACTIVE_CONVERSATION_KEYWORDS.any { kw -> textLower.contains(kw) }
+            val hasRingingKeyword = !hasActiveKeyword && RINGING_OR_DIALING_KEYWORDS.any { kw -> textLower.contains(kw) }
+
+            if (showChronometer || hasTimerPattern || hasActiveKeyword) {
+                // Đã nhấc máy ("Đang gọi thoại" / có bộ đếm giờ) -> Ghi âm toàn bộ cuộc trò chuyện!
+                val wasRingingBefore = isCallRingingOrDialing || !isCallAnswered
                 isCallRingingOrDialing = false
                 isCallAnswered = true
                 CallMonitorForegroundService.lastDetectedApp =
-                    "Đã nhấc máy: $appName ($title) • Đang ghi âm"
+                    "Đang đàm thoại: $appName ($title) • Đang ghi âm"
+                if (wasRingingBefore) {
+                    CallMonitorForegroundService.instance?.dspEngine?.notifyCallConnectedAndTrimPreRing(newTag)
+                }
             } else if (hasRingingKeyword) {
-                // Đang gọi đi / Đang đổ chuông / Cuộc gọi đến (chưa nhấc máy) -> CHỜ NHẤC MÁY!
                 isCallRingingOrDialing = true
                 isCallAnswered = false
                 CallMonitorForegroundService.lastDetectedApp =
-                    "Đang chờ nhấc máy: $appName ($title) • Chưa ghi âm"
+                    "Đang đổ chuông: $appName ($title)"
             } else {
-                // Thông báo cuộc gọi đang diễn ra không còn từ khóa đổ chuông -> ĐÃ NHẤC MÁY!
                 isCallRingingOrDialing = false
                 isCallAnswered = true
                 CallMonitorForegroundService.lastDetectedApp =

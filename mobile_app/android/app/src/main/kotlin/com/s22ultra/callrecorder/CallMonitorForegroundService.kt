@@ -407,7 +407,7 @@ class CallMonitorForegroundService : Service() {
             }
         } else if (mode != AudioManager.MODE_RINGTONE && wasInActiveCall) {
             mainHandler.removeCallbacks(callEndRunnable)
-            mainHandler.postDelayed(callEndRunnable, 1800L)
+            mainHandler.postDelayed(callEndRunnable, 600L)
         }
     }
 
