@@ -62,8 +62,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.7.0
-          name: "S22 Ultra Call Recorder Hub v2.7.0 (100% Continuous Conversation Recording + Safe Post-Call Pre-Ring Bookmark Trim + Zero Accessibility)"
+          tag_name: v2.8.0
+          name: "S22 Ultra Call Recorder Hub v2.8.0 (Native .m4a AAC-LC 128kbps Output + 100% Continuous Conversation Recording + Zero Accessibility)"
           body: |
             ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root)
             - **100% Không dùng Trợ năng (Zero AccessibilityService)**: Xóa bỏ vĩnh viễn thành phần Trợ năng khỏi APK, mở mọi ứng dụng Ngân hàng (VCB, BIDV, VietinBank, Techcombank, MB Bank, VNeID) bình thường 100%.

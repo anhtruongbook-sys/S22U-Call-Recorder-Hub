@@ -70,6 +70,16 @@ class SamsungCallSyncManager(private val context: Context) {
                         } catch (_: Exception) {
                         }
                     }
+                    if (!dspEngine.isRecording && file.isFile && file.name.endsWith(".wav", true) && file.length() > 44L) {
+                        val convertedM4a = dspEngine.encodeWavToM4a(file)
+                        if (convertedM4a != null && convertedM4a.exists() && convertedM4a.length() > 128L) {
+                            try {
+                                file.delete()
+                            } catch (_: Exception) {
+                            }
+                            file = convertedM4a
+                        }
+                    }
                     if (file.isFile &&
                         file.length() > 44L &&
                         !seenNames.contains(file.name) &&

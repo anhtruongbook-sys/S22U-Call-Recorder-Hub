@@ -5,6 +5,10 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
@@ -19,7 +23,6 @@ import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.text.SimpleDateFormat
-import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
@@ -501,12 +504,178 @@ class AudioDspRecorderEngine(private val context: Context) {
                 if (overallPeakRecorded in 35..23500) {
                     normalizeWavFileToBroadcastStandard(outFile, overallPeakRecorded)
                 }
+
+                // Chuyển đổi trực tiếp sang định dạng chuẩn .m4a (AAC-LC 128kbps MPEG-4) đồng bộ với trình ghi âm gốc Samsung
+                val m4aFile = encodeWavToM4a(outFile, sampleRate)
+                if (m4aFile != null && m4aFile.exists() && m4aFile.length() > 128L) {
+                    try {
+                        outFile.delete()
+                    } catch (_: Exception) {
+                    }
+                    outFile = m4aFile
+                    currentFilePath = outFile.absolutePath
+                }
+
                 mirrorToPermanentPublicStorage(outFile)
             } else if (outFile.exists()) {
                 try {
                     outFile.delete()
                 } catch (_: Exception) {
                 }
+            }
+        }
+    }
+
+    /**
+     * Nén phần cứng file `.wav` (đã lọc DSP & chuẩn hóa âm lượng) sang `.m4a` (AAC-LC 128kbps, MPEG-4 container)
+     * giống hệt định dạng `.m4a` của trình ghi âm cuộc gọi SIM gốc trên Samsung Galaxy S22 Ultra.
+     */
+    fun encodeWavToM4a(wavFile: File, defaultSampleRate: Int = 48000): File? {
+        if (!wavFile.exists() || wavFile.length() <= 44L) return null
+        val m4aFile = File(wavFile.parentFile, "${wavFile.nameWithoutExtension}.m4a")
+        if (m4aFile.exists()) {
+            try {
+                m4aFile.delete()
+            } catch (_: Exception) {
+            }
+        }
+
+        // Đọc sampleRate thực tế từ WAV header (byte 24..27)
+        var sampleRate = defaultSampleRate
+        try {
+            RandomAccessFile(wavFile, "r").use { raf ->
+                if (raf.length() >= 44L) {
+                    raf.seek(24L)
+                    val b0 = raf.read() and 0xFF
+                    val b1 = raf.read() and 0xFF
+                    val b2 = raf.read() and 0xFF
+                    val b3 = raf.read() and 0xFF
+                    val headerRate = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+                    if (headerRate in 8000..96000) {
+                        sampleRate = headerRate
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        var codec: MediaCodec? = null
+        var muxer: MediaMuxer? = null
+        var muxerStarted = false
+
+        return try {
+            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, 128000)
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+            }
+
+            codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+
+            muxer = MediaMuxer(m4aFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            val bufferInfo = MediaCodec.BufferInfo()
+            var trackIndex = -1
+            var inputDone = false
+            var outputDone = false
+            var totalPcmBytesRead = 0L
+            val readBuf = ByteArray(8192)
+
+            FileInputStream(wavFile).use { fis ->
+                // Bỏ qua 44 bytes WAV header
+                var skipped = 0L
+                while (skipped < 44L) {
+                    val s = fis.skip(44L - skipped)
+                    if (s <= 0) break
+                    skipped += s
+                }
+
+                while (!outputDone) {
+                    if (!inputDone) {
+                        val inBufIdx = codec.dequeueInputBuffer(10000L)
+                        if (inBufIdx >= 0) {
+                            val inBuf = codec.getInputBuffer(inBufIdx)
+                            if (inBuf != null) {
+                                inBuf.clear()
+                                val maxToRead = min(readBuf.size, inBuf.remaining())
+                                val bytesRead = fis.read(readBuf, 0, maxToRead)
+                                if (bytesRead <= 0) {
+                                    val ptsUs = (totalPcmBytesRead * 1_000_000L) / (sampleRate.toLong() * 2L)
+                                    codec.queueInputBuffer(
+                                        inBufIdx,
+                                        0,
+                                        0,
+                                        ptsUs,
+                                        MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                    )
+                                    inputDone = true
+                                } else {
+                                    inBuf.put(readBuf, 0, bytesRead)
+                                    val ptsUs = (totalPcmBytesRead * 1_000_000L) / (sampleRate.toLong() * 2L)
+                                    codec.queueInputBuffer(inBufIdx, 0, bytesRead, ptsUs, 0)
+                                    totalPcmBytesRead += bytesRead
+                                }
+                            }
+                        }
+                    }
+
+                    val outBufIdx = codec.dequeueOutputBuffer(bufferInfo, 10000L)
+                    when {
+                        outBufIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            if (!muxerStarted) {
+                                trackIndex = muxer.addTrack(codec.outputFormat)
+                                muxer.start()
+                                muxerStarted = true
+                            }
+                        }
+                        outBufIdx >= 0 -> {
+                            val outBuf = codec.getOutputBuffer(outBufIdx)
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                bufferInfo.size = 0
+                            }
+                            if (bufferInfo.size > 0 && muxerStarted && outBuf != null) {
+                                outBuf.position(bufferInfo.offset)
+                                outBuf.limit(bufferInfo.offset + bufferInfo.size)
+                                muxer.writeSampleData(trackIndex, outBuf, bufferInfo)
+                            }
+                            codec.releaseOutputBuffer(outBufIdx, false)
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                outputDone = true
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (muxerStarted) {
+                try {
+                    muxer.stop()
+                } catch (_: Exception) {
+                }
+                muxerStarted = false
+            }
+            if (m4aFile.exists() && m4aFile.length() > 128L) m4aFile else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                codec?.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                codec?.release()
+            } catch (_: Exception) {
+            }
+            if (muxerStarted) {
+                try {
+                    muxer?.stop()
+                } catch (_: Exception) {
+                }
+            }
+            try {
+                muxer?.release()
+            } catch (_: Exception) {
             }
         }
     }
@@ -636,9 +805,10 @@ class AudioDspRecorderEngine(private val context: Context) {
                 return
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val mime = if (srcFile.name.endsWith(".m4a", true)) "audio/mp4" else "audio/wav"
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, srcFile.name)
-                    put(MediaStore.Downloads.MIME_TYPE, "audio/wav")
+                    put(MediaStore.Downloads.MIME_TYPE, mime)
                     put(
                         MediaStore.Downloads.RELATIVE_PATH,
                         "${Environment.DIRECTORY_DOWNLOADS}/S22U_Call_Recordings"
