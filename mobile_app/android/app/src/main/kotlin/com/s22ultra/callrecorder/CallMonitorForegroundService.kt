@@ -40,7 +40,7 @@ class CallMonitorForegroundService : Service() {
         var autoRecordOttEnabled: Boolean = true
 
         @Volatile
-        var remoteGainBoost: Float = 4.5f
+        var remoteGainBoost: Float = 2.2f
 
         @Volatile
         var autoBoostVolume: Boolean = true

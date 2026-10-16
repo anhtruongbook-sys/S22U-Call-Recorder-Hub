@@ -114,7 +114,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
     bool? autoBoostVolume,
   }) async {
     final newAutoOtt = autoRecordOtt ?? (_status['autoRecordOttEnabled'] == true);
-    final newGain = remoteGainBoost ?? ((_status['remoteGainBoost'] as num?)?.toDouble() ?? 4.5);
+    final newGain = remoteGainBoost ?? ((_status['remoteGainBoost'] as num?)?.toDouble() ?? 2.2);
     final newBoostVol = autoBoostVolume ?? (_status['autoBoostVolume'] == true);
 
     await _channel.invokeMethod('updateSettings', {
@@ -161,7 +161,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
     final bool storageGranted = _status['storagePermissionGranted'] == true;
     final bool isRecording = _status['isRecording'] == true;
     final int peakAmp = (_status['peakAmplitude'] as num?)?.toInt() ?? 0;
-    final double gainBoost = (_status['remoteGainBoost'] as num?)?.toDouble() ?? 4.5;
+    final double gainBoost = (_status['remoteGainBoost'] as num?)?.toDouble() ?? 2.2;
     final bool autoOtt = _status['autoRecordOttEnabled'] ?? true;
     final bool autoVol = _status['autoBoostVolume'] ?? true;
     final String model = (_status['model'] ?? 'SM-S908E (S22 Ultra)').toString();
@@ -344,7 +344,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                     ),
                   ),
                   Text(
-                    'DSP x${((_status['remoteGainBoost'] as num?)?.toDouble() ?? 4.5).toStringAsFixed(1)}',
+                    'DSP x${((_status['remoteGainBoost'] as num?)?.toDouble() ?? 2.2).toStringAsFixed(1)}',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -651,14 +651,14 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Tự động nhân biên độ tín hiệu nhỏ từ loa thoại (90–4800 PCM) và nén mềm giọng bạn nói để 2 bên cân bằng nhau.',
+          'Bộ lọc 48kHz Smooth Envelope AGC + High-Pass 110Hz chống rè: Tự động cân bằng mượt mà tiếng loa thoại mà không gây vỡ đỉnh sóng.',
           style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
         ),
         Slider(
-          value: gainBoost.clamp(1.0, 8.0),
+          value: gainBoost.clamp(1.0, 4.0),
           min: 1.0,
-          max: 8.0,
-          divisions: 14,
+          max: 4.0,
+          divisions: 12,
           label: 'x${gainBoost.toStringAsFixed(1)}',
           onChanged: (val) => _updateDspSettings(remoteGainBoost: val),
         ),
