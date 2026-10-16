@@ -385,7 +385,18 @@ class CallMonitorForegroundService : Service() {
     fun evaluateAudioHardwareInterrupt() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val mode = am.mode
-        val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        val hasVoipRecordingStream = try {
+            am.activeRecordingConfigurations.any { cfg ->
+                val src = cfg.clientAudioSource
+                src == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION ||
+                        src == android.media.MediaRecorder.AudioSource.VOICE_CALL
+            }
+        } catch (_: Exception) {
+            false
+        }
+        val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION ||
+                mode == AudioManager.MODE_IN_CALL ||
+                hasVoipRecordingStream)
 
         if (isCall) {
             mainHandler.removeCallbacks(callEndRunnable)
@@ -394,13 +405,13 @@ class CallMonitorForegroundService : Service() {
                 wasInActiveCall = true
                 if (autoRecordOttEnabled && !dspEngine.isRecording) {
                     attachCallAudioAnchorIfPermitted()
-                    lastDetectedApp = "$tag (Đang ghi âm tự động)"
+                    lastDetectedApp = "$tag (Đang ghi âm tự động .m4a)"
                     dspEngine.startRecording(
                         appTag = tag,
                         remoteGainBoost = remoteGainBoost,
                         autoBoostEarpieceVolume = autoBoostVolume
                     )
-                    updateNotification("ĐANG GHI ÂM $tag (Chỉ lưu từ lúc nhấc máy)...", true)
+                    updateNotification("ĐANG GHI ÂM $tag (Định dạng .m4a)...", true)
                 }
             } else if (dspEngine.isRecording) {
                 dspEngine.updateActiveCallTag(tag)

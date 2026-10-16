@@ -184,11 +184,10 @@ class AudioDspRecorderEngine(private val context: Context) {
         if (isRecording) return currentFilePath
 
         val preferredRates = intArrayOf(48000, 16000, 44100)
-        // Chỉ dùng các nguồn thu giọng nói sạch (TUYỆT ĐỐI KHÔNG dùng UNPROCESSED vì gây sôi nhiễu)
+        // Chỉ dùng VOICE_RECOGNITION (6) và MIC (1) (để dành VOICE_COMMUNICATION (7) nhận diện chính xác cuộc gọi Zalo/VoIP)
         val cleanSources = intArrayOf(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            MediaRecorder.AudioSource.MIC
         )
 
         var recorder: AudioRecord? = null
@@ -254,10 +253,10 @@ class AudioDspRecorderEngine(private val context: Context) {
 
     @Synchronized
     fun stopRecording(): Map<String, Any?>? {
-        if (!isRecording) return null
+        if (!isRecording && recordingThread == null) return null
         isRecording = false
         try {
-            recordingThread?.join(3500)
+            recordingThread?.join(2500)
         } catch (_: InterruptedException) {
         }
         recordingThread = null
@@ -269,16 +268,14 @@ class AudioDspRecorderEngine(private val context: Context) {
             return null
         }
 
-        val durationSec = ((file.length() - 44L) / (48000L * 2L)).coerceAtLeast(1L)
-        val sha256 = computeSha256(file)
-
+        val durationSec = ((System.currentTimeMillis() - startTimeMs) / 1000L).coerceAtLeast(1L)
         return mapOf(
             "path" to file.absolutePath,
             "name" to file.name,
             "appTag" to currentAppTag,
             "sizeBytes" to file.length(),
             "durationSec" to durationSec,
-            "sha256" to sha256
+            "sha256" to ""
         )
     }
 
@@ -463,6 +460,8 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
         } catch (_: Exception) {
         } finally {
+            isRecording = false
+            currentPeakAmplitude = 0
             try {
                 activeRecorder.stop()
             } catch (_: Exception) {
@@ -528,7 +527,7 @@ class AudioDspRecorderEngine(private val context: Context) {
 
     /**
      * Nén phần cứng file `.wav` (đã lọc DSP & chuẩn hóa âm lượng) sang `.m4a` (AAC-LC 128kbps, MPEG-4 container)
-     * giống hệt định dạng `.m4a` của trình ghi âm cuộc gọi SIM gốc trên Samsung Galaxy S22 Ultra.
+     * với giới hạn thời gian cứng (chống treo 100% trên mọi chip MediaCodec).
      */
     fun encodeWavToM4a(wavFile: File, defaultSampleRate: Int = 48000): File? {
         if (!wavFile.exists() || wavFile.length() <= 44L) return null
@@ -540,7 +539,6 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
         }
 
-        // Đọc sampleRate thực tế từ WAV header (byte 24..27)
         var sampleRate = defaultSampleRate
         try {
             RandomAccessFile(wavFile, "r").use { raf ->
@@ -580,10 +578,12 @@ class AudioDspRecorderEngine(private val context: Context) {
             var inputDone = false
             var outputDone = false
             var totalPcmBytesRead = 0L
-            val readBuf = ByteArray(8192)
+            var drainIdleCount = 0
+            val deadlineMs = System.currentTimeMillis() + 3000L
+            // 1 khung AAC-LC = 1024 mẫu PCM 16-bit = 2048 bytes
+            val readBuf = ByteArray(2048)
 
             FileInputStream(wavFile).use { fis ->
-                // Bỏ qua 44 bytes WAV header
                 var skipped = 0L
                 while (skipped < 44L) {
                     val s = fis.skip(44L - skipped)
@@ -591,17 +591,17 @@ class AudioDspRecorderEngine(private val context: Context) {
                     skipped += s
                 }
 
-                while (!outputDone) {
+                while (!outputDone && System.currentTimeMillis() < deadlineMs) {
                     if (!inputDone) {
-                        val inBufIdx = codec.dequeueInputBuffer(10000L)
+                        val inBufIdx = codec.dequeueInputBuffer(5000L)
                         if (inBufIdx >= 0) {
                             val inBuf = codec.getInputBuffer(inBufIdx)
                             if (inBuf != null) {
                                 inBuf.clear()
                                 val maxToRead = min(readBuf.size, inBuf.remaining())
                                 val bytesRead = fis.read(readBuf, 0, maxToRead)
+                                val ptsUs = (totalPcmBytesRead * 1_000_000L) / (sampleRate.toLong() * 2L)
                                 if (bytesRead <= 0) {
-                                    val ptsUs = (totalPcmBytesRead * 1_000_000L) / (sampleRate.toLong() * 2L)
                                     codec.queueInputBuffer(
                                         inBufIdx,
                                         0,
@@ -611,16 +611,27 @@ class AudioDspRecorderEngine(private val context: Context) {
                                     )
                                     inputDone = true
                                 } else {
-                                    inBuf.put(readBuf, 0, bytesRead)
-                                    val ptsUs = (totalPcmBytesRead * 1_000_000L) / (sampleRate.toLong() * 2L)
-                                    codec.queueInputBuffer(inBufIdx, 0, bytesRead, ptsUs, 0)
-                                    totalPcmBytesRead += bytesRead
+                                    val evenBytes = (bytesRead / 2) * 2
+                                    if (evenBytes > 0) {
+                                        inBuf.put(readBuf, 0, evenBytes)
+                                        codec.queueInputBuffer(inBufIdx, 0, evenBytes, ptsUs, 0)
+                                        totalPcmBytesRead += evenBytes
+                                    } else {
+                                        codec.queueInputBuffer(
+                                            inBufIdx,
+                                            0,
+                                            0,
+                                            ptsUs,
+                                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                        )
+                                        inputDone = true
+                                    }
                                 }
                             }
                         }
                     }
 
-                    val outBufIdx = codec.dequeueOutputBuffer(bufferInfo, 10000L)
+                    val outBufIdx = codec.dequeueOutputBuffer(bufferInfo, 5000L)
                     when {
                         outBufIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             if (!muxerStarted) {
@@ -630,6 +641,7 @@ class AudioDspRecorderEngine(private val context: Context) {
                             }
                         }
                         outBufIdx >= 0 -> {
+                            drainIdleCount = 0
                             val outBuf = codec.getOutputBuffer(outBufIdx)
                             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                                 bufferInfo.size = 0
@@ -642,6 +654,16 @@ class AudioDspRecorderEngine(private val context: Context) {
                             codec.releaseOutputBuffer(outBufIdx, false)
                             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                                 outputDone = true
+                            }
+                        }
+                        else -> {
+                            // Nếu đã nạp hết dữ liệu đầu vào (inputDone) và bộ mã hóa trả về INFO_TRY_AGAIN_LATER 4 lần (20ms),
+                            // toàn bộ khung AAC đã được rút cạn -> thoát ngay, tuyệt đối không lặp vô tận!
+                            if (inputDone) {
+                                drainIdleCount++
+                                if (drainIdleCount >= 4) {
+                                    outputDone = true
+                                }
                             }
                         }
                     }

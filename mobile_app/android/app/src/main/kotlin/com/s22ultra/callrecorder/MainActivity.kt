@@ -66,6 +66,7 @@ class MainActivity : FlutterActivity() {
                         ) {
                             startGuardService()
                         }
+                        CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
                         val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
@@ -352,8 +353,14 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "listRecordings" -> {
-                        val list = syncManager.getAllUnifiedRecordings(fallbackDspEngine)
-                        result.success(list)
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                            ?: fallbackDspEngine
+                        Thread {
+                            val list = syncManager.getAllUnifiedRecordings(activeEngine)
+                            runOnUiThread {
+                                result.success(list)
+                            }
+                        }.start()
                     }
 
                     "playRecording" -> {

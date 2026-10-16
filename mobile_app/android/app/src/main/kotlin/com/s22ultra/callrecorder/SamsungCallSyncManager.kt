@@ -28,10 +28,14 @@ class SamsungCallSyncManager(private val context: Context) {
         )
     }
 
+    @Volatile
+    private var isConvertingLegacyWav = false
+
     fun getAllUnifiedRecordings(dspEngine: AudioDspRecorderEngine): List<Map<String, Any>> {
         val results = mutableListOf<Map<String, Any>>()
         val seenNames = mutableSetOf<String>()
         val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
+        val wavFilesToConvertAsync = mutableListOf<File>()
 
         // Tự động sao lưu các file hợp lệ (> 44 bytes) từ thư mục nội bộ sang thư mục công cộng /Download/S22U_Call_Recordings/
         try {
@@ -41,7 +45,6 @@ class SamsungCallSyncManager(private val context: Context) {
                     if (f.isFile && f.length() > 44L && (f.name.endsWith(".wav", true) || f.name.endsWith(".m4a", true))) {
                         dspEngine.mirrorToPermanentPublicStorage(f)
                     } else if (f.isFile && f.length() <= 44L && !dspEngine.isRecording) {
-                        // Tự động dọn file rỗng 0B do ngắt nhầm
                         f.delete()
                     }
                 }
@@ -70,15 +73,13 @@ class SamsungCallSyncManager(private val context: Context) {
                         } catch (_: Exception) {
                         }
                     }
-                    if (!dspEngine.isRecording && file.isFile && file.name.endsWith(".wav", true) && file.length() > 44L) {
-                        val convertedM4a = dspEngine.encodeWavToM4a(file)
-                        if (convertedM4a != null && convertedM4a.exists() && convertedM4a.length() > 128L) {
-                            try {
-                                file.delete()
-                            } catch (_: Exception) {
-                            }
-                            file = convertedM4a
-                        }
+                    if (!dspEngine.isRecording &&
+                        file.isFile &&
+                        file.name.endsWith(".wav", true) &&
+                        file.length() > 44L &&
+                        file.absolutePath != dspEngine.currentFilePath
+                    ) {
+                        wavFilesToConvertAsync.add(file)
                     }
                     if (file.isFile &&
                         file.length() > 44L &&
@@ -97,6 +98,7 @@ class SamsungCallSyncManager(private val context: Context) {
                             else -> prefix
                         }
                         val lenBytes = file.length()
+                        val fastFingerprint = "%08x%08x".format(lenBytes, file.lastModified())
                         results.add(
                             mapOf(
                                 "name" to file.name,
@@ -109,12 +111,36 @@ class SamsungCallSyncManager(private val context: Context) {
                                 "sizeKB" to (lenBytes / 1024L).coerceAtLeast(1L),
                                 "lastModifiedMs" to file.lastModified(),
                                 "dateFormatted" to dateFormat.format(Date(file.lastModified())),
-                                "sha256Short" to dspEngine.computeSha256(file).take(16)
+                                "sha256Short" to fastFingerprint
                             )
                         )
                     }
                 }
             }
+        }
+
+        // Chuyển đổi các file .wav cũ sang .m4a ở luồng ngầm (tuyệt đối không bao giờ chặn luồng giao diện Main Thread!)
+        if (wavFilesToConvertAsync.isNotEmpty() && !isConvertingLegacyWav && !dspEngine.isRecording) {
+            isConvertingLegacyWav = true
+            Thread {
+                try {
+                    for (wf in wavFilesToConvertAsync) {
+                        if (dspEngine.isRecording) break
+                        if (wf.exists() && wf.length() > 44L) {
+                            val m4a = dspEngine.encodeWavToM4a(wf)
+                            if (m4a != null && m4a.exists() && m4a.length() > 128L) {
+                                try {
+                                    wf.delete()
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    isConvertingLegacyWav = false
+                }
+            }.start()
         }
 
         // 2. Quét thư mục ghi âm cuộc gọi SIM gốc của Samsung S22 Ultra (/Recordings/Call/)
@@ -131,6 +157,7 @@ class SamsungCallSyncManager(private val context: Context) {
                     ) {
                         seenNames.add(file.name)
                         val lenBytes = file.length()
+                        val fastFingerprint = "%08x%08x".format(lenBytes, file.lastModified())
                         results.add(
                             mapOf(
                                 "name" to file.name,
@@ -143,7 +170,7 @@ class SamsungCallSyncManager(private val context: Context) {
                                 "sizeKB" to (lenBytes / 1024L).coerceAtLeast(1L),
                                 "lastModifiedMs" to file.lastModified(),
                                 "dateFormatted" to dateFormat.format(Date(file.lastModified())),
-                                "sha256Short" to dspEngine.computeSha256(file).take(16)
+                                "sha256Short" to fastFingerprint
                             )
                         )
                     }
