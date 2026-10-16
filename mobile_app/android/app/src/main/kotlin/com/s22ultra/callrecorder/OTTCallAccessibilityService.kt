@@ -1,23 +1,23 @@
 package com.s22ultra.callrecorder
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.AudioRecordingConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
-import androidx.core.content.ContextCompat
 
 /**
- * Cầu nối Âm thanh Kernel Android 16 (`OTTCallAccessibilityService`):
- * - Trên Android 16 (Samsung S22 Ultra Non-Root), khi Zalo / Viber / Telegram / WhatsApp / Messenger
- *   đang gọi (`VOICE_COMMUNICATION`), `AudioPolicyService` của nhân Android sẽ làm câm (`0x0000` - không có tiếng)
- *   mọi luồng `AudioRecord` của ứng dụng thường, NGOẠI TRỪ tiến trình có `AccessibilityService` đang hoạt động (`isA11yUid = true`).
- * - Dịch vụ này chạy ở chế độ Zero-Polling (0% Pin khi chờ) và `canRetrieveWindowContent="false"` (không đọc nội dung màn hình).
+ * Cầu nối Âm thanh Kernel Android 16 (`OTTCallAccessibilityService` v2.5.0):
+ * - Trên Android 16 (Samsung S22 Ultra Non-Root), nhân `AudioPolicyService` chỉ cho phép thu âm cuộc gọi
+ *   Zalo / Viber / Telegram / WhatsApp / Messenger khi tiến trình có `isA11yUid = true`.
+ * - ĐÃ XÓA BỎ 100% LỆNH `disableSelf()` -> Bạn chỉ cần bật 1 lần duy nhất, dịch vụ sẽ giữ nguyên trạng thái BẬT
+ *   vĩnh viễn 24/7 (0% Pin khi chờ, không đọc nội dung màn hình `canRetrieveWindowContent="false"`, không bao giờ tự tắt!).
  */
 class OTTCallAccessibilityService : AccessibilityService() {
 
@@ -45,38 +45,21 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "com.samsung.android.dialer" to "SIM_Call"
         )
 
-        val BANKING_PACKAGES = setOf(
-            "com.VCB",
-            "com.vietinbank.ipay",
-            "com.vnpay.bidv",
-            "com.vnpay.Agribank3g",
-            "com.mbmobile",
-            "vn.com.techcombank.bb.app",
-            "mobile.acb.com.vn",
-            "com.vnpay.vpbankonline",
-            "com.tpb.mb.gprsandroid",
-            "com.sacombank.ewallet",
-            "com.shb.mbanking",
-            "com.vnpay.hdbank",
-            "com.ocb.omniextra",
-            "com.msb.mbanking",
-            "vn.com.seabank.mb1",
-            "com.vib.myvib2",
-            "com.lpbank.lienviet24h",
-            "com.namabank.openbanking",
-            "com.vnpay.eximbank",
-            "vn.shinhan.global.vn.bank",
-            "com.vn.mps.MoMo",
-            "vn.com.vng.zalopay",
-            "com.bplus.vtpay",
-            "vn.gov.Bca.VNeID"
-        )
-
-        fun hasWriteSecureSettings(context: Context): Boolean {
-            return ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.WRITE_SECURE_SETTINGS
-            ) == PackageManager.PERMISSION_GRANTED
+        fun isAccessibilityServiceEnabled(context: Context): Boolean {
+            if (isServiceConnectedFlag && instance != null) return true
+            return try {
+                val enabledServices = Settings.Secure.getString(
+                    context.contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                ) ?: return false
+                val cn1 = ComponentName(context, OTTCallAccessibilityService::class.java).flattenToString()
+                val cn2 = ComponentName(context, OTTCallAccessibilityService::class.java).flattenToShortString()
+                enabledServices.contains(cn1, ignoreCase = true) ||
+                        enabledServices.contains(cn2, ignoreCase = true) ||
+                        enabledServices.contains("OTTCallAccessibilityService", ignoreCase = true)
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 
@@ -102,7 +85,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
         dspEngine = AudioDspRecorderEngine(applicationContext)
         CallMonitorForegroundService.disableMode = "NONE"
         CallMonitorForegroundService.lastDetectedApp =
-            "Cầu nối Âm thanh Android 16 ĐANG BẬT (Thu rõ 100% tiếng Zalo/OTT)"
+            "Cầu nối Thu âm Android 16 ĐANG BẬT (Sẵn sàng thu rõ 2 chiều 100%)"
 
         registerAudioCallbacks()
         ensureForegroundService()
@@ -145,15 +128,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
             if (SUPPORTED_OTT_PACKAGES.containsKey(pkg)) {
                 currentForegroundOttApp = SUPPORTED_OTT_PACKAGES[pkg]
             }
-            // Chỉ tự động tạm ẩn khi vào App Ngân hàng NẾU máy đã có quyền tự bật lại (WRITE_SECURE_SETTINGS)
-            // để người dùng KHÔNG BAO GIỜ bị rơi vào cảnh tự tắt rồi không tự bật lại được!
-            if (BANKING_PACKAGES.contains(pkg) && hasWriteSecureSettings(this)) {
-                CallMonitorForegroundService.disableMode = "BANKING_TEMP"
-                CallMonitorForegroundService.lastDetectedApp = "Tạm ẩn cho $pkg (Sẽ tự bật lại ngay khi thoát)"
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    disableSelf()
-                }
-            }
+            // TUYỆT ĐỐI KHÔNG GỌI disableSelf() để dịch vụ không bao giờ tự tắt!
         }
     }
 
@@ -161,10 +136,14 @@ class OTTCallAccessibilityService : AccessibilityService() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val mode = am.mode
         val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
-        if (isCall && CallMonitorForegroundService.autoRecordOttEnabled && !dspEngine.isRecording) {
+        if (isCall &&
+            !OTTCallNotificationListener.isCallRingingOrDialing &&
+            CallMonitorForegroundService.autoRecordOttEnabled &&
+            !dspEngine.isRecording
+        ) {
             val tag = OTTCallNotificationListener.currentActiveOttTag
                 ?: currentForegroundOttApp
-                ?: if (mode == AudioManager.MODE_IN_CALL) "SIM_Call" else "Zalo_OTT"
+                ?: if (mode == AudioManager.MODE_IN_CALL) "SIM_Call" else "Zalo"
             dspEngine.startRecording(
                 appTag = tag,
                 remoteGainBoost = CallMonitorForegroundService.remoteGainBoost,

@@ -52,13 +52,23 @@ class SamsungCallSyncManager(private val context: Context) {
         // 1. Quét toàn bộ thư mục lưu trữ OTT vĩnh viễn (/Download/S22U_Call_Recordings/ & nội bộ)
         for (ottDir in getOttDirectories(dspEngine)) {
             if (ottDir.exists() && ottDir.canRead()) {
-                ottDir.listFiles()?.forEach { file ->
-                    if (file.isFile && file.length() <= 44L && !dspEngine.isRecording) {
+                ottDir.listFiles()?.forEach { rawFile ->
+                    if (rawFile.isFile && rawFile.length() <= 44L && !dspEngine.isRecording) {
                         try {
-                            file.delete()
+                            rawFile.delete()
                         } catch (_: Exception) {
                         }
                         return@forEach
+                    }
+                    var file = rawFile
+                    if (file.isFile && file.name.contains("Tr__ng_Th_nh_Long")) {
+                        try {
+                            val fixedFile = File(file.parentFile, file.name.replace("Tr__ng_Th_nh_Long", "Trương_Thành_Long"))
+                            if (file.renameTo(fixedFile)) {
+                                file = fixedFile
+                            }
+                        } catch (_: Exception) {
+                        }
                     }
                     if (file.isFile &&
                         file.length() > 44L &&

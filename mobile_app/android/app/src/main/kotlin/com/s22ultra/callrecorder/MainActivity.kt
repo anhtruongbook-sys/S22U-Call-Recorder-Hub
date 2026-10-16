@@ -69,10 +69,11 @@ class MainActivity : FlutterActivity() {
                         val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
                             ?: CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
+                        val a11yEnabled = OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
-                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning ||
-                                OTTCallAccessibilityService.isServiceConnectedFlag
-                        diag["audioBridgeEnabled"] = OTTCallAccessibilityService.isServiceConnectedFlag
+                        diag["accessibilityEnabled"] = a11yEnabled
+                        diag["audioBridgeEnabled"] = a11yEnabled
+                        diag["guardServiceRunning"] = CallMonitorForegroundService.isGuardRunning
                         diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
@@ -187,7 +188,12 @@ class MainActivity : FlutterActivity() {
                             getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
                                 .edit().putString("disableMode", "NONE").apply()
                             startGuardService()
-                            if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
+                            if (!OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(intent)
+                            } else if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
                                 val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
@@ -196,6 +202,18 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("ERR_GUARD", e.message, null)
+                        }
+                    }
+
+                    "openNotificationListenerSettings" -> {
+                        try {
+                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("ERR_NOTIF", e.message, null)
                         }
                     }
 

@@ -129,21 +129,23 @@ class CallMonitorForegroundService : Service() {
     private val callStartRunnable = Runnable {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
         val mode = am.mode
-        // Chỉ ghi âm khi cuộc gọi ĐÃ KẾT NỐI ĐÀM THOẠI (MODE_IN_COMMUNICATION hoặc MODE_IN_CALL),
-        // tuyệt đối không mở Mic lúc đang đổ chuông (MODE_RINGTONE) để loa cuộc gọi đến êm ái 100%!
-        val isConnectedCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        // Chỉ ghi âm khi:
+        // 1. Đang ở chế độ đàm thoại (MODE_IN_COMMUNICATION hoặc MODE_IN_CALL)
+        // 2. KHÔNG PHẢI đang đổ chuông / chờ nhấc máy (!OTTCallNotificationListener.isCallRingingOrDialing)
+        val isConnectedCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL) &&
+                !OTTCallNotificationListener.isCallRingingOrDialing
         val engine = getActiveEngine()
         if (isConnectedCall && autoRecordOttEnabled && !engine.isRecording) {
             wasInActiveCall = true
             attachCallAudioAnchorIfPermitted()
             val tag = resolveActiveCallTag(mode)
-            lastDetectedApp = "$tag (Đang ghi âm 2 chiều)"
+            lastDetectedApp = "$tag (Đã nhấc máy • Đang ghi âm)"
             engine.startRecording(
                 appTag = tag,
                 remoteGainBoost = remoteGainBoost,
                 autoBoostEarpieceVolume = autoBoostVolume
             )
-            updateNotification("ĐANG GHI ÂM $tag (48kHz Broadcast AGC)...", true)
+            updateNotification("ĐANG GHI ÂM $tag (Chỉ ghi từ lúc nhấc máy)...", true)
         }
     }
 
@@ -152,8 +154,10 @@ class CallMonitorForegroundService : Service() {
         val mode = am.mode
         val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
         val engine = getActiveEngine()
-        if (!isStillCall && wasInActiveCall) {
+        if (!isStillCall) {
             wasInActiveCall = false
+            OTTCallNotificationListener.isCallRingingOrDialing = false
+            OTTCallNotificationListener.isCallAnswered = false
             if (engine.isRecording && engine.currentAppTag != "Manual") {
                 val saved = engine.stopRecording()
                 detachCallAudioAnchor()
@@ -429,18 +433,19 @@ class CallMonitorForegroundService : Service() {
 
         if (isCall) {
             mainHandler.removeCallbacks(callEndRunnable)
-            if (!wasInActiveCall && !engine.isRecording) {
-                // Chờ 1400ms sau khi người dùng đã bấm nghe cuộc gọi để Zalo / SIM khởi tạo xong luồng âm thanh
-                // (tránh làm ồn loa cuộc gọi đến và tránh bị Zalo chiếm lại quyền Mic sau khi bấm trả lời)
+            if (OTTCallNotificationListener.isCallRingingOrDialing) {
+                // Đang đổ chuông / chờ đầu dây nhấc máy -> tuyệt đối chưa bật ghi âm!
                 mainHandler.removeCallbacks(callStartRunnable)
-                mainHandler.postDelayed(callStartRunnable, 1400L)
+            } else if (!engine.isRecording) {
+                // Đã nhấc máy -> chờ 900ms để luồng thoại ổn định rồi bắt đầu thu âm
+                mainHandler.removeCallbacks(callStartRunnable)
+                mainHandler.postDelayed(callStartRunnable, 900L)
             }
         } else if (mode != AudioManager.MODE_RINGTONE) {
             mainHandler.removeCallbacks(callStartRunnable)
-            if (wasInActiveCall) {
-                // Chờ 2200ms chống ngắt nhầm khi chuyển trạng thái loa trong cuộc gọi
+            if (wasInActiveCall || engine.isRecording) {
                 mainHandler.removeCallbacks(callEndRunnable)
-                mainHandler.postDelayed(callEndRunnable, 2200L)
+                mainHandler.postDelayed(callEndRunnable, 1800L)
             }
         }
     }

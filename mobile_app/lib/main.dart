@@ -697,15 +697,15 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Dịch vụ Ghi Âm Ngầm đang Tắt hoặc thiếu quyền Mic',
+                  'Cần Bật Cầu Nối Thu Âm Android 16 (Chỉ bật 1 lần duy nhất)',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   !micGranted
                       ? '• Chưa cấp quyền Microphone & Lưu trữ.'
-                      : '• Bạn đã bấm Tắt chủ động dịch vụ ghi âm ngầm. Nhấn nút bên dưới để bật lại chế độ Ngủ Đông 0% Pin.',
-                  style: const TextStyle(fontSize: 12.5),
+                      : '• Trên Android 16, bạn cần bật "S22 Ultra OTT Call Recorder Engine" (trong mục Ứng dụng đã cài đặt) để hệ thống cho phép thu tiếng cuộc gọi Zalo/SIM.\n• Đã xóa bỏ hoàn toàn lệnh tự tắt: Bạn chỉ bật 1 lần duy nhất, dịch vụ sẽ giữ nguyên BẬT vĩnh viễn 24/7!',
+                  style: const TextStyle(fontSize: 12.5, height: 1.4),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -727,7 +727,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                           await _refreshStatusOnly();
                         },
                         icon: const Icon(Icons.bolt, size: 16),
-                        label: const Text('Bật Lại Tự Động Ghi Âm'),
+                        label: const Text('Bật Cầu Nối Thu Âm (1 Lần)'),
                       ),
                   ],
                 ),
