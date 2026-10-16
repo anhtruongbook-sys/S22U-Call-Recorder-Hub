@@ -65,10 +65,10 @@ class MainActivity : FlutterActivity() {
                         diag["bankingStealthEnabled"] = true
                         diag["autoRestoreEnabled"] = true
                         diag["disableMode"] = CallMonitorForegroundService.disableMode
-                        diag["learnedStealthApps"] = OTTCallAccessibilityService.learnedStealthPackages.toList()
+                        diag["learnedStealthApps"] = emptyList<String>()
                         diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
                         diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
-                        diag["lastDetectedApp"] = OTTCallAccessibilityService.lastDetectedApp
+                        diag["lastDetectedApp"] = CallMonitorForegroundService.lastDetectedApp
                         diag["currentlyPlayingPath"] = currentlyPlayingPath ?: ""
                         result.success(diag)
                     }
@@ -149,7 +149,6 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "clearLearnedStealthApps" -> {
-                        OTTCallAccessibilityService.clearLearnedApps(applicationContext)
                         result.success(true)
                     }
 
@@ -198,15 +197,8 @@ class MainActivity : FlutterActivity() {
 
                     "updateSettings" -> {
                         val autoOtt = call.argument<Boolean>("autoRecordOttEnabled") ?: true
-                        val stealth = call.argument<Boolean>("bankingStealthEnabled") ?: true
-                        val autoRestore = call.argument<Boolean>("autoRestoreEnabled") ?: true
                         val gain = call.argument<Double>("remoteGainBoost")?.toFloat() ?: 2.2f
                         val boostVol = call.argument<Boolean>("autoBoostVolume") ?: true
-                        OTTCallAccessibilityService.autoRecordOttEnabled = autoOtt
-                        OTTCallAccessibilityService.bankingStealthEnabled = stealth
-                        OTTCallAccessibilityService.autoRestoreEnabled = autoRestore
-                        OTTCallAccessibilityService.remoteGainBoost = gain.coerceIn(1.0f, 4.0f)
-                        OTTCallAccessibilityService.autoBoostVolume = boostVol
                         CallMonitorForegroundService.autoRecordOttEnabled = autoOtt
                         CallMonitorForegroundService.remoteGainBoost = gain.coerceIn(1.0f, 4.0f)
                         CallMonitorForegroundService.autoBoostVolume = boostVol

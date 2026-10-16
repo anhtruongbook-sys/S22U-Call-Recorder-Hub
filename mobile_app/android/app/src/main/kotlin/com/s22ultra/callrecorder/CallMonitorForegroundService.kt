@@ -66,6 +66,9 @@ class CallMonitorForegroundService : Service() {
         @Volatile
         var disableMode: String = "NONE"
 
+        @Volatile
+        var lastDetectedApp: String = "Trực chiến 24/7 ĐANG BẬT (Dùng Ngân hàng & VNeID thoải mái)"
+
         val SUPPORTED_OTT_PACKAGES = mapOf(
             "com.zing.zalo" to "Zalo",
             "com.viber.voip" to "Viber",
@@ -137,8 +140,7 @@ class CallMonitorForegroundService : Service() {
         if (action == ACTION_STOP_GUARD_MANUAL) {
             disableMode = "MANUAL_OFF"
             autoRecordOttEnabled = false
-            OTTCallAccessibilityService.autoRecordOttEnabled = false
-            OTTCallAccessibilityService.lastDetectedApp = "Đã tắt chủ động trong App"
+            lastDetectedApp = "Đã tắt chủ động trong App"
             if (dspEngine.isRecording) {
                 dspEngine.stopRecording()
             }
@@ -170,7 +172,7 @@ class CallMonitorForegroundService : Service() {
                 }
                 isGuardRunning = true
                 disableMode = "NONE"
-                OTTCallAccessibilityService.lastDetectedApp =
+                lastDetectedApp =
                     "Trực chiến 24/7 ĐANG BẬT (Dùng Ngân hàng & VNeID thoải mái)"
                 handler.removeCallbacks(guardPoller)
                 handler.post(guardPoller)
@@ -182,8 +184,7 @@ class CallMonitorForegroundService : Service() {
             ACTION_START_GUARD -> {
                 disableMode = "NONE"
                 autoRecordOttEnabled = true
-                OTTCallAccessibilityService.autoRecordOttEnabled = true
-                OTTCallAccessibilityService.lastDetectedApp =
+                lastDetectedApp =
                     "Trực chiến 24/7 ĐANG BẬT (Dùng Ngân hàng & VNeID thoải mái)"
                 updateNotification(
                     contentText = "Đang trực chiến 24/7 (An toàn 100% với mọi App Ngân hàng & VNeID)",
@@ -200,7 +201,7 @@ class CallMonitorForegroundService : Service() {
                         remoteGainBoost = remoteGainBoost,
                         autoBoostEarpieceVolume = autoBoostVolume
                     )
-                    OTTCallAccessibilityService.lastDetectedApp = "$detectedTag (Đang ghi âm)"
+                    lastDetectedApp = "$detectedTag (Đang ghi âm)"
                     updateNotification(
                         contentText = "ĐANG GHI ÂM $detectedTag (48kHz Smooth DSP)...",
                         recordingNow = true
@@ -213,7 +214,7 @@ class CallMonitorForegroundService : Service() {
                     val saved = dspEngine.stopRecording()
                     detachCallAudioAnchor()
                     val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
-                    OTTCallAccessibilityService.lastDetectedApp =
+                    lastDetectedApp =
                         "$savedTag (Đã lưu vào /Download/S22U_Call_Recordings)"
                     updateNotification(
                         contentText = "Đã lưu $savedTag • Trực chiến 24/7 đang bật",
@@ -322,7 +323,7 @@ class CallMonitorForegroundService : Service() {
             if (autoRecordOttEnabled && !dspEngine.isRecording) {
                 attachCallAudioAnchorIfPermitted()
                 val tag = resolveActiveCallTag(mode)
-                OTTCallAccessibilityService.lastDetectedApp = "$tag (Đang ghi âm tự động)"
+                lastDetectedApp = "$tag (Đang ghi âm tự động)"
                 dspEngine.startRecording(
                     appTag = tag,
                     remoteGainBoost = remoteGainBoost,
@@ -336,7 +337,7 @@ class CallMonitorForegroundService : Service() {
                 val saved = dspEngine.stopRecording()
                 detachCallAudioAnchor()
                 val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
-                OTTCallAccessibilityService.lastDetectedApp =
+                lastDetectedApp =
                     "$savedTag (Đã lưu vào /Download/S22U_Call_Recordings)"
                 updateNotification(
                     "Đã lưu $savedTag • Trực chiến 24/7 đang bật",
