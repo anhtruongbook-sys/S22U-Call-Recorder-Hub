@@ -49,9 +49,19 @@ android {
         multiDexEnabled true
     }
 
+    signingConfigs {
+        release {
+            storeFile file("s22u-release-key.p12")
+            storePassword "s22ultra2026"
+            keyAlias "s22u_key"
+            keyPassword "s22ultra2026"
+            storeType "PKCS12"
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled false
             shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
