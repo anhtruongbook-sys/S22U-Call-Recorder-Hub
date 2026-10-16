@@ -364,7 +364,14 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (accEnabled)
+                ],
+              ),
+              if (accEnabled) ...[
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
                     TextButton.icon(
                       style: TextButton.styleFrom(
                         visualDensity: VisualDensity.compact,
@@ -376,16 +383,40 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Đã TẮT Trợ năng tức thì! Bạn có thể mở mọi App Ngân hàng ngay bây giờ.'),
+                              content: Text(
+                                'Đã TẠM ẨN Trợ năng! App sẽ tự động bật lại sau khi bạn thoát Ngân hàng/VNeID.',
+                              ),
                             ),
                           );
                         }
                       },
-                      icon: const Icon(Icons.account_balance_outlined, size: 16),
-                      label: const Text('Tắt mở Ngân hàng', style: TextStyle(fontSize: 12)),
+                      icon: const Icon(Icons.account_balance_outlined, size: 15),
+                      label: const Text('Tạm ẩn dùng NH (Tự bật lại)', style: TextStyle(fontSize: 12)),
                     ),
-                ],
-              ),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                      ),
+                      onPressed: () async {
+                        await _channel.invokeMethod('disableAccessibilityManual');
+                        await _refreshStatusOnly();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Đã TẮT CHỦ ĐỘNG Trợ năng! Hệ thống sẽ giữ nguyên trạng thái tắt, không tự bật lại.',
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.power_settings_new, size: 15),
+                      label: const Text('Tắt chủ động', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ],
               if (isRecording) ...[
                 const SizedBox(height: 10),
                 LinearProgressIndicator(
@@ -635,12 +666,15 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
     required List<dynamic> installedOtt,
   }) {
     final cs = Theme.of(context).colorScheme;
+    final bool stealthOn = _status['bankingStealthEnabled'] ?? true;
+    final bool autoRestoreOn = _status['autoRestoreEnabled'] ?? true;
+    final List<dynamic> learnedApps = (_status['learnedStealthApps'] as List?) ?? [];
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
         const Text(
-          'Tự Động Hóa Ghi Âm OTT (Zalo, Viber, Telegram, WhatsApp)',
+          'Tự Động Hóa Ghi Âm OTT & Ẩn/Bật Trợ Năng Thông Minh',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 6),
@@ -661,24 +695,69 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text(
-            'Smart Banking Stealth (Tự ẩn khi mở App Ngân hàng)',
+            'Tự phát hiện App yêu cầu tắt Trợ năng & Tự học (Auto-Learn)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Ngay khoảnh khắc bạn chạm mở VCB, BIDV, MB, Techcombank, VietinBank, ACB, VPBank, VNeID..., Trợ năng tự động tắt trong 0.01s trước khi App Ngân hàng quét bảo mật, và hiện nút 1-chạm trên thanh thông báo để bật lại sau khi giao dịch xong.',
+            'Tự động tắt Trợ năng khi bạn chạm mở 35+ App Ngân hàng, VNeID hoặc bất kỳ App lạ nào hiện bảng cảnh báo yêu cầu tắt Trợ năng (tự lưu vào bộ nhớ để lần sau tắt trước khi App mở).',
             style: TextStyle(fontSize: 12.5),
           ),
-          value: _status['bankingStealthEnabled'] ?? true,
+          value: stealthOn,
           onChanged: (v) async {
             await _channel.invokeMethod('updateSettings', {
               'autoRecordOttEnabled': autoOtt,
               'bankingStealthEnabled': v,
+              'autoRestoreEnabled': autoRestoreOn,
               'remoteGainBoost': gainBoost,
               'autoBoostVolume': autoVol,
             });
             await _refreshStatusOnly();
           },
         ),
+        const Divider(),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text(
+            'Tự động BẬT LẠI Trợ năng sau khi thoát Ngân hàng / VNeID',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          subtitle: const Text(
+            'Tự động khôi phục lại Trợ năng ngay khi bạn thoát App Ngân hàng / VNeID ra màn hình chính hoặc khóa máy (Không tự bật lại nếu bạn bấm "Tắt chủ động" trong App).',
+            style: TextStyle(fontSize: 12.5),
+          ),
+          value: autoRestoreOn,
+          onChanged: (v) async {
+            await _channel.invokeMethod('updateSettings', {
+              'autoRecordOttEnabled': autoOtt,
+              'bankingStealthEnabled': stealthOn,
+              'autoRestoreEnabled': v,
+              'remoteGainBoost': gainBoost,
+              'autoBoostVolume': autoVol,
+            });
+            await _refreshStatusOnly();
+          },
+        ),
+        if (learnedApps.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  'App đã tự học (${learnedApps.length}): ${learnedApps.join(", ")}',
+                  style: TextStyle(fontSize: 12, color: cs.primary),
+                ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await _channel.invokeMethod('clearLearnedStealthApps');
+                  await _refreshStatusOnly();
+                },
+                child: const Text('Xóa bộ nhớ học', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ],
         const Divider(),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -754,11 +833,14 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
     required bool micGranted,
     required bool storageGranted,
   }) {
+    final bool usageGranted = _status['usageStatsGranted'] == true;
+    final bool writeSecureGranted = _status['writeSecureSettingsGranted'] == true;
+
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
         const Text(
-          '3 Bước Kích Hoạt Trọn Vẹn Trên Samsung S22 Ultra (Không Root)',
+          '4 Bước Kích Hoạt Trọn Vẹn Trên Samsung S22 Ultra (Không Root)',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 8),
@@ -793,11 +875,11 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
             color: accEnabled ? Colors.green : Colors.orange,
           ),
           title: const Text(
-            'Bước 2: Trực chiến Tự động (Tương thích 100% App Ngân hàng)',
+            'Bước 2: Bật Trợ năng Thông minh (Tự ẩn & Tự học)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Sử dụng Foreground Microphone Guard chuẩn Android 14-16 thay cho Trợ năng: Mở mọi App Ngân hàng (VCB, BIDV, MB, Techcombank, VNeID) bình thường 100%, không cần tắt Play Protect.',
+            'Tự động phát hiện cuộc gọi OTT và tự ẩn ngay khi chạm mở Ngân hàng, VNeID hoặc bất kỳ App nào yêu cầu tắt Trợ năng.',
             style: TextStyle(fontSize: 12.5),
           ),
           trailing: FilledButton.tonal(
@@ -810,7 +892,34 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
         ),
         const Divider(),
 
-        // Bước 3
+        // Bước 3: Quyền nhận diện thời điểm thoát App Ngân hàng / VNeID (Usage Access)
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(vertical: 4),
+          leading: Icon(
+            usageGranted ? Icons.check_circle : Icons.autorenew,
+            color: usageGranted ? Colors.green : Colors.blue,
+          ),
+          title: const Text(
+            'Bước 3: Cấp quyền phát hiện khi thoát Ngân hàng/VNeID',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            writeSecureGranted
+                ? 'Đã có cả Usage Access & WRITE_SECURE_SETTINGS: Tự bật lại Trợ năng NGẦM 100% sau khi thoát Ngân hàng!'
+                : 'Bật "Truy cập dữ liệu sử dụng" cho S22U Call Recorder để hệ thống biết chính xác giây phút bạn vừa thoát App Ngân hàng / VNeID và tự kích hoạt bật lại Trợ năng.',
+            style: const TextStyle(fontSize: 12.5),
+          ),
+          trailing: FilledButton.tonal(
+            onPressed: () async {
+              await _channel.invokeMethod('openUsageAccessSettings');
+              await _refreshStatusOnly();
+            },
+            child: Text(usageGranted ? 'Đã bật' : 'Bật ngay'),
+          ),
+        ),
+        const Divider(),
+
+        // Bước 4
         ListTile(
           contentPadding: const EdgeInsets.symmetric(vertical: 4),
           leading: Icon(
@@ -818,31 +927,12 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
             color: storageGranted ? Colors.green : Colors.blue,
           ),
           title: const Text(
-            'Bước 3: Bật Tự động ghi âm SIM gốc của Samsung One UI',
+            'Bước 4: Bật Tự động ghi âm SIM gốc & Quyền đọc File',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Mở Cài đặt Cuộc gọi của Samsung -> Ghi âm cuộc gọi -> Bật "Tự động ghi âm". App sẽ tự động đồng bộ mọi file .m4a vào chung danh sách.',
+            'Đồng bộ toàn bộ file ghi âm SIM (.m4a) từ /Recordings/Call/ vào chung danh sách với cuộc gọi OTT.',
             style: TextStyle(fontSize: 12.5),
-          ),
-          trailing: FilledButton.tonal(
-            onPressed: () => _channel.invokeMethod('openSamsungCallSettings'),
-            child: const Text('Mở Cài đặt SIM'),
-          ),
-        ),
-        const Divider(),
-
-        // Quyền đọc file đầy đủ
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(vertical: 4),
-          leading: const Icon(Icons.folder_open),
-          title: const Text(
-            'Quyền đọc toàn bộ thư mục /Recordings/Call/',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            'Đường dẫn Samsung: ${_status['samsungCallFolderPath'] ?? '/storage/emulated/0/Recordings/Call'}',
-            style: const TextStyle(fontSize: 12),
           ),
           trailing: FilledButton.tonal(
             onPressed: () => _channel.invokeMethod('openAllFilesAccess'),

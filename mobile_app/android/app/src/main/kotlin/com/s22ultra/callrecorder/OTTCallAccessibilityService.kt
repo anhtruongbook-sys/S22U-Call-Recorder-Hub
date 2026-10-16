@@ -8,20 +8,27 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * Dịch vụ Trợ năng Thông minh (Smart Banking Stealth v1.6.0 - Pre-Launch Click Interception):
- * - Giải quyết triệt để vấn đề App Ngân hàng kiểm tra Accessibility ngay trong Application.onCreate()
- *   (trước khi cửa sổ Activity của App Ngân hàng kịp hiển thị):
- *   1. Bắt sự kiện chạm ngón tay `TYPE_VIEW_CLICKED` ngay trên màn hình chính Samsung One UI Launcher:
- *      Khi ngón tay chạm vào icon mang tên Ngân hàng (VCB, BIDV, MB, Techcombank, VietinBank, ACB, VPBank, VNeID...),
- *      dịch vụ gọi `disableSelf()` ở t = 1ms (trước khi tiến trình App Ngân hàng kịp khởi tạo 150ms!).
- *   2. Bắt cả `TYPE_WINDOW_STATE_CHANGED` & `TYPE_WINDOWS_CHANGED` với quyền `QUERY_ALL_PACKAGES` đầy đủ.
- *   3. Hỗ trợ nút tắt tức thì 1-chạm `[Tắt Trợ Năng (Ngân Hàng)]` ngay trên thanh thông báo.
+ * Dịch vụ Trợ năng Thông minh (Smart Banking Stealth v1.7.0):
+ * 1. Pre-Launch Click Interception (`TYPE_VIEW_CLICKED` @ 1ms):
+ *    Bắt ngay khoảnh khắc ngón tay chạm vào Icon App Ngân hàng / VNeID / App đã học trên màn hình chính
+ *    trước khi tiến trình App kịp khởi tạo `Application.onCreate()`.
+ * 2. Universal Anti-Accessibility Prompt Scanner + Auto-Learn:
+ *    Tự động quét nội dung hộp thoại của mọi ứng dụng lạ. Nếu phát hiện yêu cầu tắt Trợ năng /
+ *    Hỗ trợ tiếp cận / Accessibility -> Tự động tắt ngay lập tức VÀ tự lưu tên gói vào bộ nhớ `Auto-Learn`.
+ * 3. Phân biệt rõ:
+ *    - `triggerAutoStealthDisable(...)` -> Báo cho `CallMonitorForegroundService` tự động BẬT LẠI sau khi thoát App.
+ *    - `triggerManualDisable(...)` -> Khi người dùng chủ động tắt trong App -> Giữ nguyên TẮT, không tự bật lại.
  */
 class OTTCallAccessibilityService : AccessibilityService() {
 
     companion object {
+        private const val PREFS_NAME = "s22u_stealth_prefs"
+        private const val KEY_LEARNED_PKGS = "learned_stealth_pkgs"
+        private const val KEY_LEARNED_LABELS = "learned_stealth_labels"
+
         @Volatile
         var instance: OTTCallAccessibilityService? = null
             private set
@@ -33,13 +40,22 @@ class OTTCallAccessibilityService : AccessibilityService() {
         var bankingStealthEnabled: Boolean = true
 
         @Volatile
+        var autoRestoreEnabled: Boolean = true
+
+        @Volatile
         var remoteGainBoost: Float = 2.2f
 
         @Volatile
         var autoBoostVolume: Boolean = true
 
         @Volatile
-        var lastDetectedApp: String = "Sẵn sàng (Pre-Launch Banking Stealth)"
+        var lastDetectedApp: String = "Sẵn sàng (Auto-Stealth & Auto-Restore)"
+
+        @Volatile
+        var learnedStealthPackages = mutableSetOf<String>()
+
+        @Volatile
+        var learnedStealthLabels = mutableSetOf<String>()
 
         val SUPPORTED_OTT_PACKAGES = mapOf(
             "com.zing.zalo" to "Zalo",
@@ -86,7 +102,9 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "com.abbank.youbank",
             "com.pvcombank.PSG",
             "com.vnid",
-            "com.vnpay.wallet"
+            "com.vnpay.wallet",
+            "com.bhtd.etax",
+            "vn.gov.gdt.etaxmobile"
         )
 
         val BANKING_KEYWORDS = listOf(
@@ -96,32 +114,112 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "ocb", "seabank", "lpbank", "lienviet", "shb", "eximbank",
             "msb", "nam a", "abbank", "pvcombank", "bvbank", "timo",
             "cake", "tnex", "vnid", "vneid", "smartbanking", "digibank",
-            "mbanking", "ebanking", "ngân hàng"
+            "mbanking", "ebanking", "ngân hàng", "etax"
         )
 
-        fun isBankingPackage(pkgName: String): Boolean {
-            if (pkgName.startsWith("com.android.") ||
-                pkgName.startsWith("com.samsung.") ||
-                pkgName.startsWith("com.sec.") ||
-                pkgName.startsWith("com.google.") ||
-                pkgName == "com.s22ultra.callrecorder" ||
-                SUPPORTED_OTT_PACKAGES.containsKey(pkgName)
-            ) {
-                return false
+        // Các cụm từ cảnh báo yêu cầu tắt Trợ năng trên hộp thoại của mọi ứng dụng (Việt + Anh)
+        val ACCESSIBILITY_PROMPT_PHRASES = listOf(
+            "tắt trợ năng",
+            "quyền trợ năng",
+            "dịch vụ trợ năng",
+            "ứng dụng trợ năng",
+            "đang bật trợ năng",
+            "sử dụng trợ năng",
+            "tắt quyền trợ năng",
+            "vô hiệu hóa trợ năng",
+            "hỗ trợ tiếp cận",
+            "khả năng truy cập",
+            "chiếm quyền điều khiển",
+            "accessibility service",
+            "disable accessibility",
+            "turn off accessibility",
+            "accessibility is enabled",
+            "accessibility permission"
+        )
+
+        fun loadLearnedApps(context: Context) {
+            try {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                learnedStealthPackages = (prefs.getStringSet(KEY_LEARNED_PKGS, emptySet()) ?: emptySet()).toMutableSet()
+                learnedStealthLabels = (prefs.getStringSet(KEY_LEARNED_LABELS, emptySet()) ?: emptySet()).toMutableSet()
+            } catch (_: Exception) {
             }
+        }
+
+        fun learnNewStealthApp(context: Context, pkgName: String, appLabel: String) {
+            if (isSystemOrSafePackage(pkgName)) return
+            try {
+                learnedStealthPackages.add(pkgName)
+                if (appLabel.isNotBlank() && appLabel.length >= 2) {
+                    learnedStealthLabels.add(appLabel.lowercase().trim())
+                }
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putStringSet(KEY_LEARNED_PKGS, learnedStealthPackages.toSet())
+                    .putStringSet(KEY_LEARNED_LABELS, learnedStealthLabels.toSet())
+                    .apply()
+            } catch (_: Exception) {
+            }
+        }
+
+        fun clearLearnedApps(context: Context) {
+            try {
+                learnedStealthPackages.clear()
+                learnedStealthLabels.clear()
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit().remove(KEY_LEARNED_PKGS).remove(KEY_LEARNED_LABELS).apply()
+            } catch (_: Exception) {
+            }
+        }
+
+        fun isSystemOrSafePackage(pkgName: String): Boolean {
+            if (pkgName.isBlank()) return true
+            return pkgName.startsWith("com.android.") ||
+                    pkgName.startsWith("com.samsung.") ||
+                    pkgName.startsWith("com.sec.") ||
+                    pkgName.startsWith("com.google.") ||
+                    pkgName == "android" ||
+                    pkgName == "com.s22ultra.callrecorder" ||
+                    SUPPORTED_OTT_PACKAGES.containsKey(pkgName)
+        }
+
+        fun isBankingOrLearnedPackage(pkgName: String): Boolean {
+            if (isSystemOrSafePackage(pkgName)) return false
             if (VIETNAMESE_BANKING_PACKAGES.contains(pkgName)) return true
+            if (learnedStealthPackages.contains(pkgName)) return true
             val lower = pkgName.lowercase()
             return BANKING_KEYWORDS.any { lower.contains(it) }
         }
 
-        fun isBankingLabelClicked(labelText: String): Boolean {
+        fun isBankingOrLearnedLabelClicked(labelText: String): Boolean {
             if (labelText.isBlank()) return false
             val lower = labelText.lowercase().trim()
-            if (lower.contains("s22u") || lower.contains("call recorder") || lower.contains("smart banking stealth")) {
+            if (lower.contains("s22u") ||
+                lower.contains("call recorder") ||
+                lower.contains("smart banking") ||
+                lower.contains("trợ năng")
+            ) {
                 return false
             }
+            if (learnedStealthLabels.any { it.isNotBlank() && lower.contains(it) }) return true
             return BANKING_KEYWORDS.any { lower.contains(it) } ||
                     lower == "mb" || lower == "acb" || lower == "vib" || lower == "shb" || lower == "ocb" || lower == "msb"
+        }
+
+        fun containsAccessibilityBlockPrompt(rawText: String): Boolean {
+            if (rawText.length < 8) return false
+            val lower = rawText.lowercase()
+            // Nếu hộp thoại của app khác nhắc đích danh các cụm từ yêu cầu tắt trợ năng
+            if (ACCESSIBILITY_PROMPT_PHRASES.any { lower.contains(it) }) {
+                return true
+            }
+            // Hoặc nếu hộp thoại cảnh báo bảo mật liệt kê đích danh "s22u call recorder"
+            if (lower.contains("s22u call recorder") &&
+                (lower.contains("tắt") || lower.contains("bảo mật") || lower.contains("disable") || lower.contains("trợ năng"))
+            ) {
+                return true
+            }
+            return false
         }
     }
 
@@ -142,8 +240,9 @@ class OTTCallAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        loadLearnedApps(applicationContext)
         dspEngine = AudioDspRecorderEngine(applicationContext)
-        lastDetectedApp = "Trợ năng ĐANG BẬT (Tự ẩn khi chạm icon Ngân hàng)"
+        lastDetectedApp = "Trợ năng ĐANG BẬT (Tự ẩn & Tự bật lại)"
         notifyForegroundGuardStatusChanged(enabled = true, reason = "Trợ năng ĐANG BẬT")
         handler.post(audioStatePoller)
     }
@@ -153,27 +252,61 @@ class OTTCallAccessibilityService : AccessibilityService() {
         val pkgName = event.packageName?.toString() ?: ""
 
         if (bankingStealthEnabled && !wasInActiveCall) {
-            // CƠ CHẾ 1 (QUAN TRỌNG NHẤT): Bắt ngay khoảnh khắc ngón tay chạm vào Icon App Ngân hàng trên Màn hình chính
-            // (Xảy ra trước khi tiến trình App Ngân hàng kịp khởi tạo Application.onCreate() 150ms!)
+            // TẦNG 1: Bắt ngay khoảnh khắc ngón tay chạm vào Icon trên Màn hình chính (1ms trước khi App mở)
             if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
                 val clickedText = buildString {
                     event.text?.forEach { append(it).append(" ") }
                     if (event.contentDescription != null) append(event.contentDescription)
                 }
-                if (isBankingLabelClicked(clickedText)) {
-                    triggerInstantSelfDisable("Icon: ${clickedText.trim()}")
+                if (isBankingOrLearnedLabelClicked(clickedText)) {
+                    triggerAutoStealthDisable(
+                        reason = "Icon: ${clickedText.trim()}",
+                        targetPkg = pkgName
+                    )
                     return
                 }
             }
 
-            // CƠ CHẾ 2: Bắt sự kiện chuyển cửa sổ của bất kỳ gói App Ngân hàng nào
-            if (pkgName.isNotEmpty() && isBankingPackage(pkgName)) {
-                triggerInstantSelfDisable(pkgName)
+            // TẦNG 2: Bắt sự kiện chuyển cửa sổ của bất kỳ gói App Ngân hàng / VNeID / App đã học nào
+            if (pkgName.isNotEmpty() && isBankingOrLearnedPackage(pkgName)) {
+                val appLabel = resolveAppLabel(pkgName)
+                triggerAutoStealthDisable(
+                    reason = appLabel,
+                    targetPkg = pkgName
+                )
                 return
+            }
+
+            // TẦNG 3 (UNIVERSAL AUTO-LEARN DETECTOR):
+            // Quét nội dung hộp thoại của mọi ứng dụng lạ xem có yêu cầu tắt Trợ năng / Accessibility không
+            if (pkgName.isNotEmpty() && !isSystemOrSafePackage(pkgName)) {
+                val eventText = buildString {
+                    event.text?.forEach { append(it).append(" ") }
+                    if (event.contentDescription != null) append(event.contentDescription).append(" ")
+                }
+                var detectedPrompt = containsAccessibilityBlockPrompt(eventText)
+
+                if (!detectedPrompt &&
+                    (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                     event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                ) {
+                    val windowText = extractVisibleWindowTextSafe(rootInActiveWindow)
+                    detectedPrompt = containsAccessibilityBlockPrompt(windowText)
+                }
+
+                if (detectedPrompt) {
+                    val appLabel = resolveAppLabel(pkgName)
+                    learnNewStealthApp(applicationContext, pkgName, appLabel)
+                    triggerAutoStealthDisable(
+                        reason = "Tự phát hiện & học: $appLabel",
+                        targetPkg = pkgName
+                    )
+                    return
+                }
             }
         }
 
-        // 3. Nếu là ứng dụng OTT hoặc cuộc gọi SIM
+        // 4. Nếu là ứng dụng OTT hoặc cuộc gọi SIM
         if (SUPPORTED_OTT_PACKAGES.containsKey(pkgName)) {
             currentForegroundOttApp = SUPPORTED_OTT_PACKAGES[pkgName]
             lastDetectedApp = currentForegroundOttApp ?: pkgName
@@ -181,17 +314,55 @@ class OTTCallAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun triggerInstantSelfDisable(reason: String) {
-        lastDetectedApp = "Đã tắt Trợ năng để dùng Ngân hàng ($reason)"
-        notifyForegroundGuardBankingStealth(reason)
-        disableSelf()
+    private fun extractVisibleWindowTextSafe(root: AccessibilityNodeInfo?): String {
+        if (root == null) return ""
+        val sb = StringBuilder()
+        var visited = 0
+        fun traverse(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 5 || visited > 35) return
+            visited++
+            node.text?.let {
+                if (it.isNotEmpty()) sb.append(it).append(" ")
+            }
+            node.contentDescription?.let {
+                if (it.isNotEmpty()) sb.append(it).append(" ")
+            }
+            val count = node.childCount
+            for (i in 0 until count) {
+                if (visited > 35) break
+                try {
+                    traverse(node.getChild(i), depth + 1)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        try {
+            traverse(root, 0)
+        } catch (_: Exception) {
+        }
+        return sb.toString()
     }
 
-    private fun notifyForegroundGuardBankingStealth(bankingPkg: String) {
+    private fun resolveAppLabel(pkgName: String): String {
+        return try {
+            val ai = packageManager.getApplicationInfo(pkgName, 0)
+            packageManager.getApplicationLabel(ai).toString()
+        } catch (_: Exception) {
+            pkgName
+        }
+    }
+
+    /**
+     * Tắt tự động tạm thời (AUTO_STEALTH) khi vào App Ngân hàng / VNeID / App cấm Trợ năng.
+     * Sẽ được `CallMonitorForegroundService` tự động BẬT LẠI sau khi người dùng thoát App đó.
+     */
+    fun triggerAutoStealthDisable(reason: String, targetPkg: String = "") {
+        lastDetectedApp = "Tạm ẩn cho $reason (Sẽ tự bật lại khi thoát)"
         try {
             val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                 action = CallMonitorForegroundService.ACTION_BANKING_STEALTH_TRIGGERED
-                putExtra("bankingPkg", bankingPkg)
+                putExtra("bankingPkg", reason)
+                putExtra("rawPkg", targetPkg)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(svcIntent)
@@ -200,6 +371,28 @@ class OTTCallAccessibilityService : AccessibilityService() {
             }
         } catch (_: Exception) {
         }
+        disableSelf()
+    }
+
+    /**
+     * Tắt CHỦ ĐỘNG bởi người dùng trong App (`MANUAL_OFF`).
+     * Tuyệt đối KHÔNG tự động bật lại cho đến khi người dùng chủ động bật lại.
+     */
+    fun triggerManualDisable(reason: String = "Tắt chủ động trong App") {
+        lastDetectedApp = "Đã tắt chủ động ($reason) • Không tự bật lại"
+        try {
+            val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                action = CallMonitorForegroundService.ACTION_MANUAL_DISABLE_ACCESSIBILITY
+                putExtra("reason", reason)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svcIntent)
+            } else {
+                startService(svcIntent)
+            }
+        } catch (_: Exception) {
+        }
+        disableSelf()
     }
 
     private fun notifyForegroundGuardStatusChanged(enabled: Boolean, reason: String) {

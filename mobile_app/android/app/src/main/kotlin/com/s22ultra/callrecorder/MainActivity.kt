@@ -48,12 +48,17 @@ class MainActivity : FlutterActivity() {
                         diag["accessibilityEnabled"] = isAccessibilityServiceEnabled()
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
+                        diag["usageStatsGranted"] = CallMonitorForegroundService.hasUsageStatsPermission(this)
+                        diag["writeSecureSettingsGranted"] = CallMonitorForegroundService.hasWriteSecureSettingsPermission(this)
                         diag["isRecording"] = activeEngine.isRecording
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
                         diag["currentAppTag"] = activeEngine.currentAppTag
                         diag["peakAmplitude"] = activeEngine.currentPeakAmplitude
                         diag["autoRecordOttEnabled"] = OTTCallAccessibilityService.autoRecordOttEnabled
                         diag["bankingStealthEnabled"] = OTTCallAccessibilityService.bankingStealthEnabled
+                        diag["autoRestoreEnabled"] = OTTCallAccessibilityService.autoRestoreEnabled
+                        diag["disableMode"] = CallMonitorForegroundService.disableMode
+                        diag["learnedStealthApps"] = OTTCallAccessibilityService.learnedStealthPackages.toList()
                         diag["remoteGainBoost"] = OTTCallAccessibilityService.remoteGainBoost.toDouble()
                         diag["autoBoostVolume"] = OTTCallAccessibilityService.autoBoostVolume
                         diag["lastDetectedApp"] = OTTCallAccessibilityService.lastDetectedApp
@@ -68,17 +73,48 @@ class MainActivity : FlutterActivity() {
 
                     "openAccessibilitySettings" -> {
                         try {
-                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            startActivity(intent)
-                            result.success(true)
+                            val restoredSilently = CallMonitorForegroundService.instance?.trySilentEnableAccessibility() ?: false
+                            if (restoredSilently) {
+                                CallMonitorForegroundService.disableMode = "NONE"
+                                result.success(true)
+                            } else {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(intent)
+                                result.success(true)
+                            }
                         } catch (e: Exception) {
                             result.error("ERR_ACCESSIBILITY", e.message, null)
                         }
                     }
 
                     "disableAccessibilityNow" -> {
-                        OTTCallAccessibilityService.instance?.triggerInstantSelfDisable("Nút 1-chạm trong App")
+                        // Tạm ẩn để dùng Ngân hàng / VNeID -> Sẽ TỰ ĐỘNG BẬT LẠI sau khi thoát
+                        OTTCallAccessibilityService.instance?.triggerAutoStealthDisable("Tạm ẩn dùng Ngân hàng/VNeID")
+                        result.success(true)
+                    }
+
+                    "disableAccessibilityManual" -> {
+                        // Người dùng chủ động tắt trong App -> Giữ nguyên TẮT, KHÔNG tự bật lại
+                        OTTCallAccessibilityService.instance?.triggerManualDisable("Tắt chủ động trong App")
+                        CallMonitorForegroundService.disableMode = "MANUAL_OFF"
+                        result.success(true)
+                    }
+
+                    "openUsageAccessSettings" -> {
+                        try {
+                            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("ERR_USAGE_STATS", e.message, null)
+                        }
+                    }
+
+                    "clearLearnedStealthApps" -> {
+                        OTTCallAccessibilityService.clearLearnedApps(applicationContext)
                         result.success(true)
                     }
 
@@ -128,10 +164,12 @@ class MainActivity : FlutterActivity() {
                     "updateSettings" -> {
                         val autoOtt = call.argument<Boolean>("autoRecordOttEnabled") ?: true
                         val stealth = call.argument<Boolean>("bankingStealthEnabled") ?: true
+                        val autoRestore = call.argument<Boolean>("autoRestoreEnabled") ?: true
                         val gain = call.argument<Double>("remoteGainBoost")?.toFloat() ?: 2.2f
                         val boostVol = call.argument<Boolean>("autoBoostVolume") ?: true
                         OTTCallAccessibilityService.autoRecordOttEnabled = autoOtt
                         OTTCallAccessibilityService.bankingStealthEnabled = stealth
+                        OTTCallAccessibilityService.autoRestoreEnabled = autoRestore
                         OTTCallAccessibilityService.remoteGainBoost = gain.coerceIn(1.0f, 4.0f)
                         OTTCallAccessibilityService.autoBoostVolume = boostVol
                         CallMonitorForegroundService.autoRecordOttEnabled = autoOtt
