@@ -67,6 +67,15 @@ class CallMonitorForegroundService : Service() {
         @Volatile
         var activeStealthAppName: String = ""
 
+        val SUPPORTED_OTT_PACKAGES = mapOf(
+            "com.zing.zalo" to "Zalo",
+            "com.viber.voip" to "Viber",
+            "org.telegram.messenger" to "Telegram",
+            "org.telegram.messenger.web" to "Telegram",
+            "com.whatsapp" to "WhatsApp",
+            "com.whatsapp.w4b" to "WhatsApp Business"
+        )
+
         fun hasWriteSecureSettingsPermission(context: Context): Boolean {
             return ContextCompat.checkSelfPermission(
                 context,
