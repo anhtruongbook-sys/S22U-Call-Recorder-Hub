@@ -834,13 +834,14 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
     required bool storageGranted,
   }) {
     final bool usageGranted = _status['usageStatsGranted'] == true;
+    final bool overlayGranted = _status['overlayPermissionGranted'] == true;
     final bool writeSecureGranted = _status['writeSecureSettingsGranted'] == true;
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
         const Text(
-          '4 Bước Kích Hoạt Trọn Vẹn Trên Samsung S22 Ultra (Không Root)',
+          'Thiết Lập Trọn Vẹn Trên Samsung S22 Ultra (Không Root)',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 8),
@@ -879,7 +880,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Tự động phát hiện cuộc gọi OTT và tự ẩn ngay khi chạm mở Ngân hàng, VNeID hoặc bất kỳ App nào yêu cầu tắt Trợ năng.',
+            'Tự động ẩn ngay khi chạm mở Ngân hàng, VNeID hoặc bất kỳ App nào yêu cầu tắt Trợ năng.',
             style: TextStyle(fontSize: 12.5),
           ),
           trailing: FilledButton.tonal(
@@ -900,13 +901,13 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
             color: usageGranted ? Colors.green : Colors.blue,
           ),
           title: const Text(
-            'Bước 3: Cấp quyền phát hiện khi thoát Ngân hàng/VNeID',
+            'Bước 3: Bật "Truy cập dữ liệu sử dụng" (BẮT BUỘC)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: Text(
             writeSecureGranted
-                ? 'Đã có cả Usage Access & WRITE_SECURE_SETTINGS: Tự bật lại Trợ năng NGẦM 100% sau khi thoát Ngân hàng!'
-                : 'Bật "Truy cập dữ liệu sử dụng" cho S22U Call Recorder để hệ thống biết chính xác giây phút bạn vừa thoát App Ngân hàng / VNeID và tự kích hoạt bật lại Trợ năng.',
+                ? 'Đã có Usage Access & WRITE_SECURE_SETTINGS: Tự bật lại Trợ năng NGẦM 100% khi thoát Ngân hàng!'
+                : 'Giúp hệ thống biết chính xác giây phút bạn thoát App Ngân hàng / chuyển sang App khác VÀ tự động ghi âm đúng tên Zalo/Viber/Telegram ngay cả khi Trợ năng đang tắt!',
             style: const TextStyle(fontSize: 12.5),
           ),
           trailing: FilledButton.tonal(
@@ -919,20 +920,45 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
         ),
         const Divider(),
 
-        // Bước 4
+        // Bước 4: Quyền Hiển thị trên ứng dụng khác (Để Android 16 cho phép tự bật màn hình khôi phục khi thoát NH)
         ListTile(
           contentPadding: const EdgeInsets.symmetric(vertical: 4),
           leading: Icon(
-            storageGranted ? Icons.check_circle : Icons.phone_in_talk,
-            color: storageGranted ? Colors.green : Colors.blue,
+            overlayGranted ? Icons.check_circle : Icons.layers_outlined,
+            color: overlayGranted ? Colors.green : Colors.blue,
           ),
           title: const Text(
-            'Bước 4: Bật Tự động ghi âm SIM gốc & Quyền đọc File',
+            'Bước 4: Bật "Hiển thị trên ứng dụng khác" (Android 16)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Đồng bộ toàn bộ file ghi âm SIM (.m4a) từ /Recordings/Call/ vào chung danh sách với cuộc gọi OTT.',
+            'Cho phép dịch vụ chạy ngầm trên Android 16 tự động bật bảng khôi phục Trợ năng ngay khi bạn vừa thoát App Ngân hàng sang App khác.',
             style: TextStyle(fontSize: 12.5),
+          ),
+          trailing: FilledButton.tonal(
+            onPressed: () async {
+              await _channel.invokeMethod('openOverlaySettings');
+              await _refreshStatusOnly();
+            },
+            child: Text(overlayGranted ? 'Đã bật' : 'Bật ngay'),
+          ),
+        ),
+        const Divider(),
+
+        // Bước 5: Lưu trữ vĩnh viễn không mất file khi xóa App
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(vertical: 4),
+          leading: Icon(
+            storageGranted ? Icons.check_circle : Icons.folder_special_outlined,
+            color: storageGranted ? Colors.green : Colors.blue,
+          ),
+          title: const Text(
+            'Bước 5: Lưu vĩnh viễn (Xóa App không mất File)',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            'Nơi lưu vĩnh viễn: ${_status['permanentOttFolderPath'] ?? '/storage/emulated/0/Download/S22U_Call_Recordings'}\nĐồng bộ SIM: ${_status['samsungCallFolderPath'] ?? '/storage/emulated/0/Recordings/Call'}',
+            style: const TextStyle(fontSize: 12),
           ),
           trailing: FilledButton.tonal(
             onPressed: () => _channel.invokeMethod('openAllFilesAccess'),

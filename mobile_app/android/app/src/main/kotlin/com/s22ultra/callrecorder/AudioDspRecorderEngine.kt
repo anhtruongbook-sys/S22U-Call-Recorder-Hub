@@ -1,5 +1,6 @@
 package com.s22ultra.callrecorder
 
+import android.content.ContentValues
 import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -8,6 +9,9 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -20,18 +24,8 @@ import kotlin.math.abs
 
 /**
  * Động cơ thu âm & xử lý tín hiệu số (Studio-Grade Smooth Envelope DSP) cho Samsung Galaxy S22 Ultra:
- *
- * Khắc phục triệt để hiện tượng RÈ / VỠ TIẾNG (Distortion & Crackling) khi ghi âm OTT:
- * 1. Đồng bộ xung nhịp phần cứng VoIP (48000 Hz): Chip Qualcomm Aqstic trên S22 Ultra xử lý
- *    Zalo/Viber/Telegram/WhatsApp ở 48kHz/16kHz. Dùng 48000 Hz loại bỏ hoàn toàn lỗi trượt mẫu (Resampler Jitter) của 44100 Hz.
- * 2. Bộ lọc khử ù DC & Lọc thông cao 120Hz (1st-Order High-Pass DC Blocker) kết hợp Lọc thông thấp 7.5kHz:
- *    Loại bỏ tiếng ù trầm do tay cầm máy và tiếng xì rít tần số cao.
- * 3. Bộ Khuếch Đại Theo Đường Bao Mượt (Smooth Envelope Follower AGC):
- *    - Thay thế hoàn toàn phép nhân nhảy bậc từng mẫu (nguyên nhân gây méo giao cắt Crossover Distortion làm rè tiếng).
- *    - Hệ số khuếch đại (smoothedGain) biến thiên trơn tru theo năng lượng âm thanh thực tế:
- *      + Khi bạn nói gần Mic (tín hiệu lớn): Attack nhanh (10ms) hạ Gain về ~1.0x để giọng bạn trong trẻo, không vỡ đỉnh.
- *      + Khi người bên kia nói qua loa thoại (tín hiệu nhỏ): Release mượt (200ms) nâng Gain lên mức khuếch đại sạch,
- *        bảo toàn 100% dạng sóng hình sin tự nhiên.
+ * - Lưu trữ vĩnh viễn tại `/storage/emulated/0/Download/S22U_Call_Recordings/` (và đồng bộ MediaStore.Downloads)
+ *   để đảm bảo KHI XÓA / GỠ CÀI ĐẶT APP KHÔNG BAO GIỜ BỊ MẤT FILE GHI ÂM.
  */
 class AudioDspRecorderEngine(private val context: Context) {
 
@@ -51,12 +45,38 @@ class AudioDspRecorderEngine(private val context: Context) {
     private var recordingThread: Thread? = null
     private var startTimeMs: Long = 0L
 
-    fun getRecordingsDir(): File {
+    fun getPermanentPublicDir(): File {
+        return File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "S22U_Call_Recordings"
+        )
+    }
+
+    fun getInternalFallbackDir(): File {
         val dir = File(context.getExternalFilesDir(null), "OTT_Recordings")
         if (!dir.exists()) {
             dir.mkdirs()
         }
         return dir
+    }
+
+    /**
+     * Ưu tiên ghi trực tiếp vào thư mục công cộng `/storage/emulated/0/Download/S22U_Call_Recordings/`
+     * (không bao giờ bị xóa khi gỡ cài đặt App). Nếu chưa cấp quyền All Files Access, ghi tạm vào bộ nhớ
+     * đệm rồi tự động đẩy sang `MediaStore.Downloads` (`Download/S22U_Call_Recordings/`) ngay khi dừng ghi.
+     */
+    fun getRecordingsDir(): File {
+        try {
+            val publicDir = getPermanentPublicDir()
+            if (!publicDir.exists()) {
+                publicDir.mkdirs()
+            }
+            if (publicDir.exists() && publicDir.canWrite()) {
+                return publicDir
+            }
+        } catch (_: Exception) {
+        }
+        return getInternalFallbackDir()
     }
 
     @Synchronized
@@ -308,7 +328,47 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
             if (outFile.exists() && totalAudioBytes > 0) {
                 updateWavHeader(outFile, totalAudioBytes, sampleRate, 1, 16)
+                mirrorToPermanentPublicStorage(outFile)
             }
+        }
+    }
+
+    /**
+     * Đảm bảo 100% file ghi âm luôn tồn tại trong thư mục công cộng `/storage/emulated/0/Download/S22U_Call_Recordings/`
+     * kể cả khi chưa cấp quyền All Files Access (sử dụng MediaStore.Downloads của Android 10-16).
+     * Khi gỡ cài đặt (Uninstall) ứng dụng, toàn bộ các file này vẫn nằm nguyên vẹn vĩnh viễn trong máy.
+     */
+    fun mirrorToPermanentPublicStorage(srcFile: File) {
+        try {
+            val pubDir = getPermanentPublicDir()
+            if (srcFile.parentFile?.canonicalPath == pubDir.canonicalPath) {
+                return
+            }
+            if (!pubDir.exists()) pubDir.mkdirs()
+            val directDst = File(pubDir, srcFile.name)
+            if (pubDir.canWrite()) {
+                srcFile.copyTo(directDst, overwrite = true)
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, srcFile.name)
+                    put(MediaStore.Downloads.MIME_TYPE, "audio/wav")
+                    put(
+                        MediaStore.Downloads.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_DOWNLOADS}/S22U_Call_Recordings"
+                    )
+                }
+                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    context.contentResolver.openOutputStream(uri)?.use { outStream ->
+                        FileInputStream(srcFile).use { inStream ->
+                            inStream.copyTo(outStream)
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 

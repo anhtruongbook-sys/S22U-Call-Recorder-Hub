@@ -19,35 +19,63 @@ class SamsungCallSyncManager(private val context: Context) {
         )
     }
 
+    fun getOttDirectories(dspEngine: AudioDspRecorderEngine): List<File> {
+        val extRoot = Environment.getExternalStorageDirectory()
+        return listOf(
+            dspEngine.getPermanentPublicDir(),
+            File(extRoot, "Recordings/S22U_Call_Recordings"),
+            dspEngine.getInternalFallbackDir()
+        )
+    }
+
     fun getAllUnifiedRecordings(dspEngine: AudioDspRecorderEngine): List<Map<String, Any>> {
         val results = mutableListOf<Map<String, Any>>()
+        val seenNames = mutableSetOf<String>()
         val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault())
 
-        // 1. Quét thư mục OTT_Recordings của ứng dụng (Zalo, Viber, Telegram, WhatsApp, Manual)
-        val ottDir = dspEngine.getRecordingsDir()
-        if (ottDir.exists()) {
-            ottDir.listFiles()?.forEach { file ->
-                if (file.isFile && (file.name.endsWith(".wav", true) || file.name.endsWith(".m4a", true))) {
-                    val prefix = file.name.substringBefore("_", "OTT")
-                    val appSource = when {
-                        prefix.contains("Zalo", true) -> "Zalo"
-                        prefix.contains("Viber", true) -> "Viber"
-                        prefix.contains("Telegram", true) -> "Telegram"
-                        prefix.contains("WhatsApp", true) -> "WhatsApp"
-                        else -> prefix
+        // Tự động sao lưu các file từ thư mục nội bộ sang thư mục công cộng /Download/S22U_Call_Recordings/
+        try {
+            val internalDir = dspEngine.getInternalFallbackDir()
+            if (internalDir.exists()) {
+                internalDir.listFiles()?.forEach { f ->
+                    if (f.isFile && (f.name.endsWith(".wav", true) || f.name.endsWith(".m4a", true))) {
+                        dspEngine.mirrorToPermanentPublicStorage(f)
                     }
-                    results.add(
-                        mapOf(
-                            "name" to file.name,
-                            "path" to file.absolutePath,
-                            "source" to appSource,
-                            "category" to "OTT_VOIP",
-                            "sizeKB" to (file.length() / 1024L).coerceAtLeast(1L),
-                            "lastModifiedMs" to file.lastModified(),
-                            "dateFormatted" to dateFormat.format(Date(file.lastModified())),
-                            "sha256Short" to dspEngine.computeSha256(file).take(16)
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        // 1. Quét toàn bộ thư mục lưu trữ OTT vĩnh viễn (/Download/S22U_Call_Recordings/ & nội bộ)
+        for (ottDir in getOttDirectories(dspEngine)) {
+            if (ottDir.exists() && ottDir.canRead()) {
+                ottDir.listFiles()?.forEach { file ->
+                    if (file.isFile &&
+                        !seenNames.contains(file.name) &&
+                        (file.name.endsWith(".wav", true) || file.name.endsWith(".m4a", true))
+                    ) {
+                        seenNames.add(file.name)
+                        val prefix = file.name.substringBefore("_", "OTT")
+                        val appSource = when {
+                            prefix.contains("Zalo", true) -> "Zalo"
+                            prefix.contains("Viber", true) -> "Viber"
+                            prefix.contains("Telegram", true) -> "Telegram"
+                            prefix.contains("WhatsApp", true) -> "WhatsApp"
+                            else -> prefix
+                        }
+                        results.add(
+                            mapOf(
+                                "name" to file.name,
+                                "path" to file.absolutePath,
+                                "source" to appSource,
+                                "category" to "OTT_VOIP",
+                                "sizeKB" to (file.length() / 1024L).coerceAtLeast(1L),
+                                "lastModifiedMs" to file.lastModified(),
+                                "dateFormatted" to dateFormat.format(Date(file.lastModified())),
+                                "sha256Short" to dspEngine.computeSha256(file).take(16)
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -56,11 +84,14 @@ class SamsungCallSyncManager(private val context: Context) {
         for (dir in getSamsungNativeDirectories()) {
             if (dir.exists() && dir.canRead()) {
                 dir.listFiles()?.forEach { file ->
-                    if (file.isFile && (file.name.endsWith(".m4a", true) ||
+                    if (file.isFile &&
+                        !seenNames.contains(file.name) &&
+                        (file.name.endsWith(".m4a", true) ||
                                 file.name.endsWith(".amr", true) ||
                                 file.name.endsWith(".wav", true) ||
                                 file.name.endsWith(".mp3", true))
                     ) {
+                        seenNames.add(file.name)
                         results.add(
                             mapOf(
                                 "name" to file.name,
@@ -88,6 +119,10 @@ class SamsungCallSyncManager(private val context: Context) {
         val sdkInt = Build.VERSION.SDK_INT
 
         val samsungDir = File(Environment.getExternalStorageDirectory(), "Recordings/Call")
+        val permanentOttDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "S22U_Call_Recordings"
+        )
         val installedOtt = mutableListOf<String>()
         val pm = context.packageManager
 
@@ -109,6 +144,7 @@ class SamsungCallSyncManager(private val context: Context) {
             "samsungCallFolderExists" to samsungDir.exists(),
             "samsungCallFolderReadable" to samsungDir.canRead(),
             "samsungCallFolderPath" to samsungDir.absolutePath,
+            "permanentOttFolderPath" to permanentOttDir.absolutePath,
             "installedOttApps" to installedOtt
         )
     }

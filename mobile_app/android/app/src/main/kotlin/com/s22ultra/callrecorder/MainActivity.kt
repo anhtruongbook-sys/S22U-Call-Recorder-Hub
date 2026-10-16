@@ -49,6 +49,7 @@ class MainActivity : FlutterActivity() {
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
                         diag["usageStatsGranted"] = CallMonitorForegroundService.hasUsageStatsPermission(this)
+                        diag["overlayPermissionGranted"] = CallMonitorForegroundService.hasOverlayPermission(this)
                         diag["writeSecureSettingsGranted"] = CallMonitorForegroundService.hasWriteSecureSettingsPermission(this)
                         diag["isRecording"] = activeEngine.isRecording
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
@@ -110,6 +111,28 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("ERR_USAGE_STATS", e.message, null)
+                        }
+                    }
+
+                    "openOverlaySettings" -> {
+                        try {
+                            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:$packageName")
+                                ).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            } else {
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.fromParts("package", packageName, null)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("ERR_OVERLAY", e.message, null)
                         }
                     }
 
