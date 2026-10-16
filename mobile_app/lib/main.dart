@@ -743,16 +743,19 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
             color: accEnabled ? Colors.green : Colors.orange,
           ),
           title: const Text(
-            'Bước 2: Bật Dịch vụ Trợ năng (S22 Ultra OTT Engine)',
+            'Bước 2: Trực chiến Tự động (Tương thích 100% App Ngân hàng)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Vào Cài đặt -> Hỗ trợ tiếp cận -> Ứng dụng đã cài đặt -> Bật "S22 Ultra OTT Call Recorder Engine".',
+            'Sử dụng Foreground Microphone Guard chuẩn Android 14-16 thay cho Trợ năng: Mở mọi App Ngân hàng (VCB, BIDV, MB, Techcombank, VNeID) bình thường 100%, không cần tắt Play Protect.',
             style: TextStyle(fontSize: 12.5),
           ),
           trailing: FilledButton.tonal(
-            onPressed: () => _channel.invokeMethod('openAccessibilitySettings'),
-            child: Text(accEnabled ? 'Đã bật' : 'Mở Cài đặt'),
+            onPressed: () async {
+              await _channel.invokeMethod('openAccessibilitySettings');
+              await _refreshStatusOnly();
+            },
+            child: Text(accEnabled ? 'Đang chạy' : 'Kích hoạt'),
           ),
         ),
         const Divider(),

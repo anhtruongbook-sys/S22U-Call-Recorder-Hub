@@ -1,18 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Quyền thu âm & tinh chỉnh DSP cho cuộc gọi OTT & SIM -->
+    <!-- Quyền thu âm & tinh chỉnh DSP (100% Tương thích App Ngân hàng & Google Play Protect - KHÔNG dùng Accessibility) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- Quyền đọc/ghi file ghi âm của Samsung One UI (/Recordings/Call/) -->
+    <!-- Quyền đọc file ghi âm SIM gốc của Samsung One UI (/Recordings/Call/) -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
 
-    <!-- Quyền chạy nền Foreground Microphone trên Android 14-16 (Samsung S22 Ultra) -->
+    <!-- Quyền chạy nền Foreground Microphone hợp chuẩn trên Android 14-16 (Samsung S22 Ultra) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -33,8 +29,7 @@
     <application
         android:label="S22U Call Recorder"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true">
+        android:icon="@mipmap/ic_launcher">
 
         <activity
             android:name=".MainActivity"
@@ -53,22 +48,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Dịch vụ Trợ năng (AccessibilityService) thu âm đồng thời Zalo, Viber, Telegram, WhatsApp & SIM -->
-        <service
-            android:name=".OTTCallAccessibilityService"
-            android:label="@string/accessibility_service_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:foregroundServiceType="microphone"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-
-        <!-- Dịch vụ Foreground Microphone dự phòng -->
+        <!-- Dịch vụ Foreground Microphone chuẩn Android 14-16 (Không dùng BIND_ACCESSIBILITY_SERVICE để App Ngân hàng hoạt động 100%) -->
         <service
             android:name=".CallMonitorForegroundService"
             android:foregroundServiceType="microphone"
