@@ -223,20 +223,18 @@ class MainActivity : FlutterActivity() {
                             startGuardService()
                         }
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val path = activeEngine.startRecording(
                             appTag = appTag,
-                            remoteGainBoost = OTTCallAccessibilityService.remoteGainBoost,
-                            autoBoostEarpieceVolume = OTTCallAccessibilityService.autoBoostVolume
+                            remoteGainBoost = CallMonitorForegroundService.remoteGainBoost,
+                            autoBoostEarpieceVolume = CallMonitorForegroundService.autoBoostVolume
                         )
                         result.success(path ?: "")
                     }
 
                     "stopRecording" -> {
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val info = activeEngine.stopRecording()
                         result.success(info)
@@ -283,16 +281,6 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponentName = ComponentName(this, OTTCallAccessibilityService::class.java)
-        val enabledServicesSetting = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabledServicesSetting.contains(expectedComponentName.flattenToString()) ||
-                enabledServicesSetting.contains("${packageName}/.OTTCallAccessibilityService")
     }
 
     private fun startGuardService() {

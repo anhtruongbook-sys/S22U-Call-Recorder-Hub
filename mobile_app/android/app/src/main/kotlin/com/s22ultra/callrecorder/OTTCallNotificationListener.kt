@@ -95,7 +95,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
             } else {
                 appName
             }
-            OTTCallAccessibilityService.lastDetectedApp = "Phát hiện cuộc gọi: $appName ($title)"
+            CallMonitorForegroundService.lastDetectedApp = "Phát hiện cuộc gọi: $appName ($title)"
             ensureForegroundGuardRunning()
         }
     }
