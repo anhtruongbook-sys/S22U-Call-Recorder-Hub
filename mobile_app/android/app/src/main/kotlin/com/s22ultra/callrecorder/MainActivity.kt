@@ -66,10 +66,13 @@ class MainActivity : FlutterActivity() {
                         ) {
                             startGuardService()
                         }
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
-                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning
+                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning ||
+                                OTTCallAccessibilityService.isServiceRunning
+                        diag["audioBridgeEnabled"] = OTTCallAccessibilityService.isServiceRunning
                         diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
@@ -321,7 +324,8 @@ class MainActivity : FlutterActivity() {
                             startGuardService()
                         }
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val path = activeEngine.startRecording(
                             appTag = appTag,
@@ -332,7 +336,8 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "stopRecording" -> {
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val info = activeEngine.stopRecording()
                         result.success(info)
@@ -565,7 +570,7 @@ class MainActivity : FlutterActivity() {
                 prepare()
                 try {
                     loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
-                        setTargetGain(200)
+                        setTargetGain(750)
                         enabled = true
                     }
                 } catch (_: Exception) {

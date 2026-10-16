@@ -122,21 +122,28 @@ class CallMonitorForegroundService : Service() {
     private var audioAnchorView: View? = null
     private var callbacksRegistered = false
 
+    fun getActiveEngine(): AudioDspRecorderEngine {
+        return OTTCallAccessibilityService.instance?.dspEngine ?: dspEngine
+    }
+
     private val callStartRunnable = Runnable {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
         val mode = am.mode
-        val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
-        if (isStillCall && autoRecordOttEnabled && !dspEngine.isRecording) {
+        // Chỉ ghi âm khi cuộc gọi ĐÃ KẾT NỐI ĐÀM THOẠI (MODE_IN_COMMUNICATION hoặc MODE_IN_CALL),
+        // tuyệt đối không mở Mic lúc đang đổ chuông (MODE_RINGTONE) để loa cuộc gọi đến êm ái 100%!
+        val isConnectedCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        val engine = getActiveEngine()
+        if (isConnectedCall && autoRecordOttEnabled && !engine.isRecording) {
             wasInActiveCall = true
             attachCallAudioAnchorIfPermitted()
             val tag = resolveActiveCallTag(mode)
-            lastDetectedApp = "$tag (Đang ghi âm tự động)"
-            dspEngine.startRecording(
+            lastDetectedApp = "$tag (Đang ghi âm 2 chiều)"
+            engine.startRecording(
                 appTag = tag,
                 remoteGainBoost = remoteGainBoost,
                 autoBoostEarpieceVolume = autoBoostVolume
             )
-            updateNotification("ĐANG GHI ÂM $tag (Lọc ồn 280Hz-3600Hz)...", true)
+            updateNotification("ĐANG GHI ÂM $tag (48kHz Broadcast AGC)...", true)
         }
     }
 
@@ -144,10 +151,11 @@ class CallMonitorForegroundService : Service() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
         val mode = am.mode
         val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        val engine = getActiveEngine()
         if (!isStillCall && wasInActiveCall) {
             wasInActiveCall = false
-            if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
-                val saved = dspEngine.stopRecording()
+            if (engine.isRecording && engine.currentAppTag != "Manual") {
+                val saved = engine.stopRecording()
                 detachCallAudioAnchor()
                 val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
                 lastDetectedApp =
@@ -289,25 +297,27 @@ class CallMonitorForegroundService : Service() {
             }
 
             ACTION_QUICK_RECORD -> {
-                if (!dspEngine.isRecording) {
+                val engine = getActiveEngine()
+                if (!engine.isRecording) {
                     attachCallAudioAnchorIfPermitted()
                     val detectedTag = resolveActiveCallTag(AudioManager.MODE_IN_COMMUNICATION)
-                    dspEngine.startRecording(
+                    engine.startRecording(
                         appTag = detectedTag,
                         remoteGainBoost = remoteGainBoost,
                         autoBoostEarpieceVolume = autoBoostVolume
                     )
                     lastDetectedApp = "$detectedTag (Đang ghi âm)"
                     updateNotification(
-                        contentText = "ĐANG GHI ÂM $detectedTag (48kHz Smooth DSP)...",
+                        contentText = "ĐANG GHI ÂM $detectedTag (48kHz Broadcast AGC)...",
                         recordingNow = true
                     )
                 }
             }
 
             ACTION_STOP_RECORD -> {
-                if (dspEngine.isRecording) {
-                    val saved = dspEngine.stopRecording()
+                val engine = getActiveEngine()
+                if (engine.isRecording) {
+                    val saved = engine.stopRecording()
                     detachCallAudioAnchor()
                     val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
                     lastDetectedApp =
@@ -415,15 +425,17 @@ class CallMonitorForegroundService : Service() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val mode = am.mode
         val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        val engine = getActiveEngine()
 
         if (isCall) {
             mainHandler.removeCallbacks(callEndRunnable)
-            if (!wasInActiveCall && !dspEngine.isRecording) {
-                // Chờ 800ms để Zalo / Điện thoại Samsung khóa xong bộ khử ồn loa thoại phần cứng trước khi mở Mic phụ
+            if (!wasInActiveCall && !engine.isRecording) {
+                // Chờ 1400ms sau khi người dùng đã bấm nghe cuộc gọi để Zalo / SIM khởi tạo xong luồng âm thanh
+                // (tránh làm ồn loa cuộc gọi đến và tránh bị Zalo chiếm lại quyền Mic sau khi bấm trả lời)
                 mainHandler.removeCallbacks(callStartRunnable)
-                mainHandler.postDelayed(callStartRunnable, 800L)
+                mainHandler.postDelayed(callStartRunnable, 1400L)
             }
-        } else {
+        } else if (mode != AudioManager.MODE_RINGTONE) {
             mainHandler.removeCallbacks(callStartRunnable)
             if (wasInActiveCall) {
                 // Chờ 2200ms chống ngắt nhầm khi chuyển trạng thái loa trong cuộc gọi
