@@ -541,7 +541,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                           TextButton.icon(
                             style: TextButton.styleFrom(
                               visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 6),
                             ),
                             onPressed: () async {
                               if (isPlaying) {
@@ -556,6 +556,27 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                               size: 18,
                             ),
                             label: Text(isPlaying ? 'Dừng' : 'Nghe'),
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'Chia sẻ file (Zalo, Telegram, Drive...)',
+                            icon: Icon(Icons.share_outlined, size: 19, color: cs.primary),
+                            onPressed: () async {
+                              await _channel.invokeMethod('shareRecording', {'path': path});
+                            },
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'Lưu bản sao vào thư mục Download',
+                            icon: const Icon(Icons.download_outlined, size: 19),
+                            onPressed: () async {
+                              final saved = await _channel.invokeMethod('exportToDownloads', {'path': path});
+                              if (mounted && saved != null && saved.toString().isNotEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Đã lưu vào: $saved')),
+                                );
+                              }
+                            },
                           ),
                           IconButton(
                             visualDensity: VisualDensity.compact,
