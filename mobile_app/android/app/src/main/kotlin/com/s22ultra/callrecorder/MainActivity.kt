@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -23,6 +25,7 @@ class MainActivity : FlutterActivity() {
     private lateinit var fallbackDspEngine: AudioDspRecorderEngine
     private lateinit var syncManager: SamsungCallSyncManager
     private var mediaPlayer: MediaPlayer? = null
+    private var loudnessEnhancer: LoudnessEnhancer? = null
     private var currentlyPlayingPath: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -347,12 +350,32 @@ class MainActivity : FlutterActivity() {
             stopAudioPlayback()
             val file = File(path)
             if (!file.exists()) return false
+
+            // Nếu là file .wav cũ bị thu nhỏ, tự động chuẩn hóa Peak lên 28.500 (-1.2 dBFS) ngay trước khi phát!
+            if (file.name.lowercase().endsWith(".wav")) {
+                fallbackDspEngine.normalizeWavFileToBroadcastStandard(file)
+            }
+
             mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
                 setDataSource(file.absolutePath)
+                setVolume(1.0f, 1.0f)
                 setOnCompletionListener {
                     currentlyPlayingPath = null
                 }
                 prepare()
+                try {
+                    loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
+                        setTargetGain(900) // Tăng cường +9.0 dB phần cứng khi nghe lại trong App
+                        enabled = true
+                    }
+                } catch (_: Exception) {
+                }
                 start()
             }
             currentlyPlayingPath = path
@@ -364,6 +387,12 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopAudioPlayback() {
+        try {
+            loudnessEnhancer?.enabled = false
+            loudnessEnhancer?.release()
+        } catch (_: Exception) {
+        }
+        loudnessEnhancer = null
         try {
             mediaPlayer?.stop()
         } catch (_: Exception) {
