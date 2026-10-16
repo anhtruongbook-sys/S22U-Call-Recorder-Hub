@@ -62,8 +62,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v1.4.0
-          name: "S22 Ultra Call Recorder Hub v1.4.0 (Banking-Safe + Play Protect Safe + 48kHz Anti-Distortion DSP)"
+          tag_name: v1.5.0
+          name: "S22 Ultra Call Recorder Hub v1.5.0 (Smart Banking Stealth + 48kHz Anti-Distortion DSP)"
           body: |
             ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root)
             - **Gọi SIM thường**: Tự động đồng bộ file `.m4a` Lossless từ trình ghi âm phần cứng gốc của Samsung One UI (`/Recordings/Call/`).

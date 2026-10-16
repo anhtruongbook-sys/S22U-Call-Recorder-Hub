@@ -1,20 +1,27 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Quyền thu âm & tinh chỉnh DSP (100% Tương thích App Ngân hàng & Google Play Protect - KHÔNG dùng Accessibility) -->
+    <!-- Quyền thu âm & tinh chỉnh DSP cho cuộc gọi OTT & SIM -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- Quyền đọc file ghi âm SIM gốc của Samsung One UI (/Recordings/Call/) -->
+    <!-- Quyền đọc/ghi file ghi âm của Samsung One UI (/Recordings/Call/) -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
 
-    <!-- Quyền chạy nền Foreground Microphone hợp chuẩn trên Android 14-16 (Samsung S22 Ultra) -->
+    <!-- Quyền tự động Bật/Tắt ngầm Trợ năng khi mở/đóng App Ngân hàng (nếu được cấp qua ADB) -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+
+    <!-- Quyền chạy nền Foreground Microphone trên Android 14-16 (Samsung S22 Ultra) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Khai báo Package Visibility trên Android 11+ để nhận diện Zalo, Viber, Telegram, WhatsApp & Samsung Call -->
+    <!-- Khai báo Package Visibility trên Android 11+ -->
     <queries>
         <package android:name="com.zing.zalo" />
         <package android:name="com.viber.voip" />
@@ -29,7 +36,8 @@
     <application
         android:label="S22U Call Recorder"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true">
 
         <activity
             android:name=".MainActivity"
@@ -48,13 +56,28 @@
             </intent-filter>
         </activity>
 
-        <!-- Dịch vụ Foreground Microphone chuẩn Android 14-16 (Không dùng BIND_ACCESSIBILITY_SERVICE để App Ngân hàng hoạt động 100%) -->
+        <!-- Dịch vụ Trợ năng thông minh: Tự động disableSelf() trong 0.01s ngay khi mở App Ngân hàng -->
+        <service
+            android:name=".OTTCallAccessibilityService"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:foregroundServiceType="microphone"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Dịch vụ Foreground Guard điều phối tự động khôi phục & thông báo 1-chạm -->
         <service
             android:name=".CallMonitorForegroundService"
             android:foregroundServiceType="microphone"
             android:exported="false" />
 
-        <!-- FileProvider hỗ trợ Chia sẻ (Share) trực tiếp file ghi âm .wav / .m4a qua Zalo, Telegram, Drive, Email... -->
+        <!-- FileProvider hỗ trợ Chia sẻ (Share) trực tiếp file ghi âm .wav / .m4a -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

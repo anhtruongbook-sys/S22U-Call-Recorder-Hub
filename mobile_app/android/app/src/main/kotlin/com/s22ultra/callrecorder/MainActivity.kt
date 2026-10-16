@@ -30,7 +30,6 @@ class MainActivity : FlutterActivity() {
         fallbackDspEngine = AudioDspRecorderEngine(applicationContext)
         syncManager = SamsungCallSyncManager(applicationContext)
 
-        // Tự động bật Foreground Guard ngay khi mở App nếu đã có quyền Microphone
         if (hasMicPermission() && !CallMonitorForegroundService.isGuardRunning) {
             startGuardService()
         }
@@ -42,19 +41,22 @@ class MainActivity : FlutterActivity() {
                         if (hasMicPermission() && !CallMonitorForegroundService.isGuardRunning) {
                             startGuardService()
                         }
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine ?: fallbackDspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
+                            ?: fallbackDspEngine
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
-                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning
+                        diag["accessibilityEnabled"] = isAccessibilityServiceEnabled()
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
                         diag["isRecording"] = activeEngine.isRecording
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
                         diag["currentAppTag"] = activeEngine.currentAppTag
                         diag["peakAmplitude"] = activeEngine.currentPeakAmplitude
-                        diag["autoRecordOttEnabled"] = CallMonitorForegroundService.autoRecordOttEnabled
-                        diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
-                        diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
-                        diag["lastDetectedApp"] = CallMonitorForegroundService.lastDetectedApp
+                        diag["autoRecordOttEnabled"] = OTTCallAccessibilityService.autoRecordOttEnabled
+                        diag["bankingStealthEnabled"] = OTTCallAccessibilityService.bankingStealthEnabled
+                        diag["remoteGainBoost"] = OTTCallAccessibilityService.remoteGainBoost.toDouble()
+                        diag["autoBoostVolume"] = OTTCallAccessibilityService.autoBoostVolume
+                        diag["lastDetectedApp"] = OTTCallAccessibilityService.lastDetectedApp
                         diag["currentlyPlayingPath"] = currentlyPlayingPath ?: ""
                         result.success(diag)
                     }
@@ -65,13 +67,14 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "openAccessibilitySettings" -> {
-                        if (!hasMicPermission()) {
-                            requestRuntimePermissions()
-                            result.success(false)
-                            return@setMethodCallHandler
+                        try {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("ERR_ACCESSIBILITY", e.message, null)
                         }
-                        startGuardService()
-                        result.success(true)
                     }
 
                     "openSamsungCallSettings" -> {
@@ -99,14 +102,33 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "openAllFilesAccess" -> {
-                        requestRuntimePermissions()
-                        result.success(true)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            try {
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                    data = Uri.parse("package:$packageName")
+                                }
+                                startActivity(intent)
+                                result.success(true)
+                            } catch (_: Exception) {
+                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                startActivity(intent)
+                                result.success(true)
+                            }
+                        } else {
+                            requestRuntimePermissions()
+                            result.success(true)
+                        }
                     }
 
                     "updateSettings" -> {
                         val autoOtt = call.argument<Boolean>("autoRecordOttEnabled") ?: true
+                        val stealth = call.argument<Boolean>("bankingStealthEnabled") ?: true
                         val gain = call.argument<Double>("remoteGainBoost")?.toFloat() ?: 2.2f
                         val boostVol = call.argument<Boolean>("autoBoostVolume") ?: true
+                        OTTCallAccessibilityService.autoRecordOttEnabled = autoOtt
+                        OTTCallAccessibilityService.bankingStealthEnabled = stealth
+                        OTTCallAccessibilityService.remoteGainBoost = gain.coerceIn(1.0f, 4.0f)
+                        OTTCallAccessibilityService.autoBoostVolume = boostVol
                         CallMonitorForegroundService.autoRecordOttEnabled = autoOtt
                         CallMonitorForegroundService.remoteGainBoost = gain.coerceIn(1.0f, 4.0f)
                         CallMonitorForegroundService.autoBoostVolume = boostVol
@@ -123,17 +145,21 @@ class MainActivity : FlutterActivity() {
                             startGuardService()
                         }
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine ?: fallbackDspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
+                            ?: fallbackDspEngine
                         val path = activeEngine.startRecording(
                             appTag = appTag,
-                            remoteGainBoost = CallMonitorForegroundService.remoteGainBoost,
-                            autoBoostEarpieceVolume = CallMonitorForegroundService.autoBoostVolume
+                            remoteGainBoost = OTTCallAccessibilityService.remoteGainBoost,
+                            autoBoostEarpieceVolume = OTTCallAccessibilityService.autoBoostVolume
                         )
                         result.success(path ?: "")
                     }
 
                     "stopRecording" -> {
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine ?: fallbackDspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
+                            ?: fallbackDspEngine
                         val info = activeEngine.stopRecording()
                         result.success(info)
                     }
@@ -179,6 +205,16 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expectedComponentName = ComponentName(this, OTTCallAccessibilityService::class.java)
+        val enabledServicesSetting = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabledServicesSetting.contains(expectedComponentName.flattenToString()) ||
+                enabledServicesSetting.contains("${packageName}/.OTTCallAccessibilityService")
     }
 
     private fun startGuardService() {
@@ -290,11 +326,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun hasStoragePermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.READ_MEDIA_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager() ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(
+                                this,
+                                Manifest.permission.READ_MEDIA_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED)
         } else {
             ContextCompat.checkSelfPermission(
                 this,
@@ -305,13 +343,15 @@ class MainActivity : FlutterActivity() {
 
     private fun requestRuntimePermissions() {
         val perms = mutableListOf(
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.READ_MEDIA_AUDIO)
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
         ActivityCompat.requestPermissions(this, perms.toTypedArray(), 1001)
     }

@@ -633,7 +633,29 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text(
-            'Tự động nâng âm lượng loa thoại S22 Ultra lên 85%',
+            'Smart Banking Stealth (Tự ẩn khi mở App Ngân hàng)',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          subtitle: const Text(
+            'Ngay khoảnh khắc bạn chạm mở VCB, BIDV, MB, Techcombank, VietinBank, ACB, VPBank, VNeID..., Trợ năng tự động tắt trong 0.01s trước khi App Ngân hàng quét bảo mật, và hiện nút 1-chạm trên thanh thông báo để bật lại sau khi giao dịch xong.',
+            style: TextStyle(fontSize: 12.5),
+          ),
+          value: _status['bankingStealthEnabled'] ?? true,
+          onChanged: (v) async {
+            await _channel.invokeMethod('updateSettings', {
+              'autoRecordOttEnabled': autoOtt,
+              'bankingStealthEnabled': v,
+              'remoteGainBoost': gainBoost,
+              'autoBoostVolume': autoVol,
+            });
+            await _refreshStatusOnly();
+          },
+        ),
+        const Divider(),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text(
+            'Tự động nâng âm lượng loa thoại S22 Ultra lên 75%',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
