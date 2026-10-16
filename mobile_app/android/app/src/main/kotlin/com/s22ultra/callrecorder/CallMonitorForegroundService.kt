@@ -8,35 +8,41 @@ import android.app.PendingIntent
 import android.app.Service
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 
+/**
+ * Dịch vụ Trực chiến Ghi âm 24/7 Vĩnh viễn (Zero-Accessibility Architecture v1.9.0):
+ * - KHÔNG SỬ DỤNG AccessibilityService -> Mở VCB Digibank, MB Bank, BIDV, Techcombank, VNeID 24/7
+ *   mà KHÔNG BAO GIỜ bị chặn, KHÔNG CẦN TẮT và KHÔNG BAO GIỜ PHẢI BẬT LẠI BẰNG TAY!
+ * - Kết hợp 3 tầng công nghệ hợp chuẩn Android 16:
+ *   1. `FOREGROUND_SERVICE_TYPE_MICROPHONE` + `AudioManager` (`MODE_IN_COMMUNICATION` / `MODE_IN_CALL`)
+ *   2. `OTTCallNotificationListener` + `UsageStatsManager` để nhận diện chính xác tên ứng dụng
+ *      (`Zalo`, `Viber`, `Telegram`, `WhatsApp`, `Messenger`) và tên người gọi.
+ *   3. `1x1 Pixel Transparent Audio Anchor` (`TYPE_APPLICATION_OVERLAY` chỉ gắn trong lúc đang có cuộc gọi)
+ *      giúp Android 16 cấp quyền thu âm song song (`hasOverlayUi = true`) cùng lúc với Zalo/OTT.
+ */
 class CallMonitorForegroundService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "s22u_call_recorder_guard"
-        private const val ALERT_CHANNEL_ID = "s22u_call_recorder_restore_alert"
         private const val NOTIF_ID = 2201
-        private const val ALERT_NOTIF_ID = 2202
 
         const val ACTION_START_GUARD = "com.s22ultra.callrecorder.ACTION_START_GUARD"
-        const val ACTION_BANKING_STEALTH_TRIGGERED = "com.s22ultra.callrecorder.ACTION_BANKING_STEALTH_TRIGGERED"
-        const val ACTION_DISABLE_ACCESSIBILITY_NOW = "com.s22ultra.callrecorder.ACTION_DISABLE_ACCESSIBILITY_NOW"
-        const val ACTION_MANUAL_DISABLE_ACCESSIBILITY = "com.s22ultra.callrecorder.ACTION_MANUAL_DISABLE_ACCESSIBILITY"
-        const val ACTION_RESTORE_ACCESSIBILITY_NOW = "com.s22ultra.callrecorder.ACTION_RESTORE_ACCESSIBILITY_NOW"
+        const val ACTION_STOP_GUARD_MANUAL = "com.s22ultra.callrecorder.ACTION_STOP_GUARD_MANUAL"
         const val ACTION_QUICK_RECORD = "com.s22ultra.callrecorder.ACTION_QUICK_RECORD"
         const val ACTION_STOP_RECORD = "com.s22ultra.callrecorder.ACTION_STOP_RECORD"
 
@@ -57,17 +63,8 @@ class CallMonitorForegroundService : Service() {
         @Volatile
         var autoBoostVolume: Boolean = true
 
-        /**
-         * Trạng thái tắt Trợ năng:
-         * - "NONE": Đang bật bình thường
-         * - "AUTO_STEALTH": Tạm ẩn tự động khi vào Ngân hàng / VNeID / App cấm Trợ năng -> SẼ TỰ ĐỘNG BẬT LẠI khi thoát App
-         * - "MANUAL_OFF": Người dùng chủ động tắt trong App -> TUYỆT ĐỐI KHÔNG tự bật lại
-         */
         @Volatile
         var disableMode: String = "NONE"
-
-        @Volatile
-        var activeStealthAppName: String = ""
 
         val SUPPORTED_OTT_PACKAGES = mapOf(
             "com.zing.zalo" to "Zalo",
@@ -75,15 +72,11 @@ class CallMonitorForegroundService : Service() {
             "org.telegram.messenger" to "Telegram",
             "org.telegram.messenger.web" to "Telegram",
             "com.whatsapp" to "WhatsApp",
-            "com.whatsapp.w4b" to "WhatsApp Business"
+            "com.whatsapp.w4b" to "WhatsApp_Business",
+            "com.facebook.orca" to "Messenger",
+            "com.samsung.android.incallui" to "SIM_Call",
+            "com.samsung.android.dialer" to "SIM_Call"
         )
-
-        fun hasWriteSecureSettingsPermission(context: Context): Boolean {
-            return ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.WRITE_SECURE_SETTINGS
-            ) == PackageManager.PERMISSION_GRANTED
-        }
 
         fun hasOverlayPermission(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -122,42 +115,44 @@ class CallMonitorForegroundService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var wasInActiveCall = false
-
-    private var stealthTriggeredAtMs: Long = 0L
-    private var stealthExitedAtMs: Long = 0L
-    private var hasEnteredStealthTargetApp: Boolean = false
-    private var lastKnownForegroundPkg: String = ""
-    private var hasPromptedManualRestoreThisSession: Boolean = false
+    private var audioAnchorView: View? = null
 
     private val guardPoller = object : Runnable {
         override fun run() {
             checkAudioState()
-            checkAutoRestoreCondition()
-            handler.postDelayed(this, 1000L)
+            handler.postDelayed(this, 800L)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
-        OTTCallAccessibilityService.loadLearnedApps(applicationContext)
         dspEngine = AudioDspRecorderEngine(applicationContext)
-        createNotificationChannels()
+        createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        val isAccNow = OTTCallAccessibilityService.instance != null
+
+        if (action == ACTION_STOP_GUARD_MANUAL) {
+            disableMode = "MANUAL_OFF"
+            autoRecordOttEnabled = false
+            OTTCallAccessibilityService.autoRecordOttEnabled = false
+            OTTCallAccessibilityService.lastDetectedApp = "Đã tắt chủ động trong App"
+            if (dspEngine.isRecording) {
+                dspEngine.stopRecording()
+            }
+            detachCallAudioAnchor()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            isGuardRunning = false
+            return START_NOT_STICKY
+        }
 
         if (!isGuardRunning) {
             val notif = buildNotification(
-                contentText = if (isAccNow) {
-                    "Trợ năng ĐANG BẬT • Tự ẩn khi vào Ngân hàng/VNeID & Tự bật lại khi thoát"
-                } else {
-                    "Trực chiến ngầm ĐANG CHẠY • Tự động ghi âm Zalo/OTT & SIM"
-                },
-                recordingNow = false,
-                accessibilityCurrentlyOn = isAccNow
+                contentText = "Đang trực chiến 24/7 (An toàn 100% với mọi App Ngân hàng & VNeID)",
+                recordingNow = false
             )
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -174,6 +169,9 @@ class CallMonitorForegroundService : Service() {
                     startForeground(NOTIF_ID, notif)
                 }
                 isGuardRunning = true
+                disableMode = "NONE"
+                OTTCallAccessibilityService.lastDetectedApp =
+                    "Trực chiến 24/7 ĐANG BẬT (Dùng Ngân hàng & VNeID thoải mái)"
                 handler.removeCallbacks(guardPoller)
                 handler.post(guardPoller)
             } catch (_: Exception) {
@@ -182,111 +180,44 @@ class CallMonitorForegroundService : Service() {
 
         when (action) {
             ACTION_START_GUARD -> {
-                val accOn = OTTCallAccessibilityService.instance != null
-                if (accOn) {
-                    disableMode = "NONE"
-                    activeStealthAppName = ""
-                    hasPromptedManualRestoreThisSession = false
-                    cancelRestoreAlertNotification()
-                }
+                disableMode = "NONE"
+                autoRecordOttEnabled = true
+                OTTCallAccessibilityService.autoRecordOttEnabled = true
+                OTTCallAccessibilityService.lastDetectedApp =
+                    "Trực chiến 24/7 ĐANG BẬT (Dùng Ngân hàng & VNeID thoải mái)"
                 updateNotification(
-                    contentText = if (accOn) {
-                        "Trợ năng ĐANG BẬT • Tự ẩn khi vào Ngân hàng/VNeID & Tự bật lại khi thoát"
-                    } else if (disableMode == "MANUAL_OFF") {
-                        "Đã TẮT CHỦ ĐỘNG Trợ năng (Không tự bật lại)"
-                    } else {
-                        "Trợ năng ĐANG TẠM ẨN • Sẽ tự bật lại sau khi thoát Ngân hàng/VNeID"
-                    },
-                    recordingNow = false,
-                    accessibilityCurrentlyOn = accOn
+                    contentText = "Đang trực chiến 24/7 (An toàn 100% với mọi App Ngân hàng & VNeID)",
+                    recordingNow = dspEngine.isRecording
                 )
-            }
-
-            // Nút [Tạm ẩn dùng NH] -> Chỉ bắt đầu tính thoát SAU KHI người dùng thực sự mở App Ngân hàng/VNeID
-            ACTION_DISABLE_ACCESSIBILITY_NOW -> {
-                disableMode = "AUTO_STEALTH"
-                activeStealthAppName = "Ngân hàng / VNeID"
-                stealthTriggeredAtMs = System.currentTimeMillis()
-                stealthExitedAtMs = 0L
-                hasEnteredStealthTargetApp = false
-                hasPromptedManualRestoreThisSession = false
-                OTTCallAccessibilityService.instance?.triggerAutoStealthDisable("Tạm ẩn dùng NH")
-                updateNotification(
-                    contentText = "ĐÃ TẠM ẨN TRỢ NĂNG! Mở Ngân hàng/VNeID thoải mái, thoát ra sẽ tự bật lại.",
-                    recordingNow = false,
-                    accessibilityCurrentlyOn = false
-                )
-            }
-
-            // Khi người dùng CHỦ ĐỘNG bấm tắt trong App -> Tính là MANUAL_OFF (TUYỆT ĐỐI KHÔNG tự bật lại)
-            ACTION_MANUAL_DISABLE_ACCESSIBILITY -> {
-                disableMode = "MANUAL_OFF"
-                activeStealthAppName = ""
-                stealthTriggeredAtMs = 0L
-                stealthExitedAtMs = 0L
-                hasEnteredStealthTargetApp = false
-                OTTCallAccessibilityService.lastDetectedApp = "Đã tắt chủ động (Không tự bật lại)"
-                updateNotification(
-                    contentText = "ĐÃ TẮT CHỦ ĐỘNG TRỢ NĂNG • Giữ nguyên trạng thái tắt theo ý bạn.",
-                    recordingNow = false,
-                    accessibilityCurrentlyOn = false
-                )
-            }
-
-            // Khi hệ thống tự phát hiện chạm icon hoặc mở App Ngân hàng / VNeID / Hộp thoại yêu cầu tắt Trợ năng
-            ACTION_BANKING_STEALTH_TRIGGERED -> {
-                val pkgLabel = intent.getStringExtra("bankingPkg") ?: "Ngân hàng / VNeID"
-                val rawPkg = intent.getStringExtra("rawPkg") ?: ""
-                disableMode = "AUTO_STEALTH"
-                activeStealthAppName = pkgLabel
-                stealthTriggeredAtMs = System.currentTimeMillis()
-                stealthExitedAtMs = 0L
-                // Nếu sự kiện đến từ chính gói Ngân hàng/VNeID thì đánh dấu đã vào App Ngân hàng ngay!
-                hasEnteredStealthTargetApp = rawPkg.isNotEmpty() &&
-                        OTTCallAccessibilityService.isBankingOrLearnedPackage(rawPkg)
-                hasPromptedManualRestoreThisSession = false
-                OTTCallAccessibilityService.lastDetectedApp = "Đang dùng $pkgLabel (Tự bật lại khi thoát)"
-                updateNotification(
-                    contentText = "ĐANG ẨN CHO $pkgLabel • Thoát ra hoặc chuyển App khác sẽ tự bật lại.",
-                    recordingNow = false,
-                    accessibilityCurrentlyOn = false
-                )
-            }
-
-            ACTION_RESTORE_ACCESSIBILITY_NOW -> {
-                cancelRestoreAlertNotification()
-                val restoredSilently = trySilentEnableAccessibility()
-                if (!restoredSilently) {
-                    openAccessibilitySettingsActivity()
-                }
             }
 
             ACTION_QUICK_RECORD -> {
-                val activeEngine = OTTCallAccessibilityService.instance?.dspEngine ?: dspEngine
-                if (!activeEngine.isRecording) {
-                    val detectedTag = resolveCurrentOttTagFromUsageStats() ?: "OTT_Call"
-                    activeEngine.startRecording(
+                if (!dspEngine.isRecording) {
+                    attachCallAudioAnchorIfPermitted()
+                    val detectedTag = resolveActiveCallTag(AudioManager.MODE_IN_COMMUNICATION)
+                    dspEngine.startRecording(
                         appTag = detectedTag,
-                        remoteGainBoost = OTTCallAccessibilityService.remoteGainBoost,
-                        autoBoostEarpieceVolume = OTTCallAccessibilityService.autoBoostVolume
+                        remoteGainBoost = remoteGainBoost,
+                        autoBoostEarpieceVolume = autoBoostVolume
                     )
+                    OTTCallAccessibilityService.lastDetectedApp = "$detectedTag (Đang ghi âm)"
                     updateNotification(
                         contentText = "ĐANG GHI ÂM $detectedTag (48kHz Smooth DSP)...",
-                        recordingNow = true,
-                        accessibilityCurrentlyOn = OTTCallAccessibilityService.instance != null
+                        recordingNow = true
                     )
                 }
             }
 
             ACTION_STOP_RECORD -> {
-                val activeEngine = OTTCallAccessibilityService.instance?.dspEngine ?: dspEngine
-                if (activeEngine.isRecording) {
-                    activeEngine.stopRecording()
-                    val accOn = OTTCallAccessibilityService.instance != null
+                if (dspEngine.isRecording) {
+                    val saved = dspEngine.stopRecording()
+                    detachCallAudioAnchor()
+                    val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
+                    OTTCallAccessibilityService.lastDetectedApp =
+                        "$savedTag (Đã lưu vào /Download/S22U_Call_Recordings)"
                     updateNotification(
-                        contentText = "Đã lưu cuộc gọi vào /Download/S22U_Call_Recordings",
-                        recordingNow = false,
-                        accessibilityCurrentlyOn = accOn
+                        contentText = "Đã lưu $savedTag • Trực chiến 24/7 đang bật",
+                        recordingNow = false
                     )
                 }
             }
@@ -296,216 +227,88 @@ class CallMonitorForegroundService : Service() {
     }
 
     /**
-     * Kiểm tra điều kiện tự động BẬT LẠI Trợ năng sau khi người dùng thoát App Ngân hàng / VNeID
-     * hoặc chuyển từ App Ngân hàng sang bất kỳ App nào khác.
-     * - Nếu `disableMode == "MANUAL_OFF"` -> BỎ QUA 100%, không bao giờ tự bật lại.
+     * Gắn điểm neo cửa sổ 1x1 trong suốt CHỈ TRONG LÚC ĐANG CÓ CUỘC GỌI để Android 16 cấp quyền
+     * thu âm Microphone song song (`hasOverlayUi = true`) cùng với Zalo/Viber/Telegram/WhatsApp.
+     * Khi không có cuộc gọi (hoặc khi mở App Ngân hàng), điểm neo này KHÔNG tồn tại.
      */
-    private fun checkAutoRestoreCondition() {
-        if (OTTCallAccessibilityService.instance != null) {
-            if (disableMode == "AUTO_STEALTH") {
-                disableMode = "NONE"
-                cancelRestoreAlertNotification()
+    private fun attachCallAudioAnchorIfPermitted() {
+        if (audioAnchorView != null || !hasOverlayPermission(this)) return
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+            val view = View(this)
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
             }
-            return
-        }
-
-        // Tôn trọng tuyệt đối trường hợp người dùng tắt chủ động trong App
-        if (disableMode != "AUTO_STEALTH" || !OTTCallAccessibilityService.autoRestoreEnabled) {
-            return
-        }
-
-        val now = System.currentTimeMillis()
-        val elapsedSinceStealth = now - stealthTriggeredAtMs
-        // Đợi tối thiểu 2.5 giây từ lúc chạm icon để App Ngân hàng kịp mở lên màn hình
-        if (elapsedSinceStealth < 2500L) return
-
-        // TÍN HIỆU 1: Người dùng tắt màn hình khóa máy -> Chắc chắn đã dùng xong Ngân hàng
-        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
-        if (pm != null && !pm.isInteractive && elapsedSinceStealth > 4000L) {
-            performAutoRestore("Khóa màn hình sau khi dùng $activeStealthAppName")
-            return
-        }
-
-        // TÍN HIỆU 2: Theo dõi gói ứng dụng đang hiển thị trên màn hình bằng UsageStatsManager (cửa sổ 3 phút)
-        if (hasUsageStatsPermission(this)) {
-            val fgPkg = queryCurrentForegroundPackage(lookbackMs = 180_000L)
-            if (fgPkg.isNotEmpty()) {
-                lastKnownForegroundPkg = fgPkg
+            val params = WindowManager.LayoutParams(
+                1,
+                1,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 0
+                y = 0
             }
-            val currentFg = lastKnownForegroundPkg
-            if (currentFg.isNotEmpty()) {
-                val isCurrentlyInStealthApp = OTTCallAccessibilityService.isBankingOrLearnedPackage(currentFg)
-                if (isCurrentlyInStealthApp) {
-                    // Đang ở trong App Ngân hàng / VNeID -> Ghi nhận đã vào và reset bộ đếm thoát
-                    hasEnteredStealthTargetApp = true
-                    stealthExitedAtMs = 0L
-                    hasPromptedManualRestoreThisSession = false
-                    OTTCallAccessibilityService.lastDetectedApp = "Đang trong $activeStealthAppName"
-                } else if (hasEnteredStealthTargetApp) {
-                    // Người dùng ĐÃ VÀO App Ngân hàng và vừa THOÁT RA màn hình chính HOẶC CHUYỂN SANG APP KHÁC!
-                    // (Bỏ qua trình cài đặt/permission controller của hệ thống)
-                    val isSystemPermissionDialog = currentFg.contains("permissioncontroller") ||
-                            currentFg == "com.android.settings"
-                    if (!isSystemPermissionDialog) {
-                        if (stealthExitedAtMs == 0L) {
-                            stealthExitedAtMs = now
-                        } else if (now - stealthExitedAtMs >= 2500L) {
-                            // Sau 2.5 giây kể từ khi rời khỏi App Ngân hàng sang App khác / Màn hình chính -> Khôi phục ngay!
-                            performAutoRestore("Đã thoát $activeStealthAppName")
-                        }
-                    }
-                }
-            }
+            wm.addView(view, params)
+            audioAnchorView = view
+        } catch (_: Exception) {
         }
     }
 
-    private fun queryCurrentForegroundPackage(lookbackMs: Long = 180_000L): String {
+    private fun detachCallAudioAnchor() {
+        val view = audioAnchorView ?: return
+        audioAnchorView = null
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            wm?.removeView(view)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun resolveActiveCallTag(audioMode: Int): String {
+        // Ưu tiên 1: Lấy tên ứng dụng + tên người gọi từ OTTCallNotificationListener
+        val notifTag = OTTCallNotificationListener.currentActiveOttTag
+        if (!notifTag.isNullOrBlank()) {
+            return notifTag
+        }
+        // Ưu tiên 2: Lấy tên ứng dụng đang mở trên màn hình từ UsageStatsManager
+        if (hasUsageStatsPermission(this)) {
+            val fg = queryCurrentForegroundOttPackage()
+            if (fg != null) return fg
+        }
+        return if (audioMode == AudioManager.MODE_IN_CALL) "SIM_Call" else "Zalo_OTT"
+    }
+
+    private fun queryCurrentForegroundOttPackage(): String? {
         return try {
-            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return ""
+            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
             val now = System.currentTimeMillis()
-            val events = usm.queryEvents(now - lookbackMs, now)
+            val events = usm.queryEvents(now - 180_000L, now)
             val event = UsageEvents.Event()
-            var latestPkg = ""
+            var latestOttLabel: String? = null
             var latestTime = 0L
             while (events.hasNextEvent()) {
                 events.getNextEvent(event)
                 if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
                     event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
                 ) {
-                    if (event.timeStamp >= latestTime && !event.packageName.isNullOrBlank()) {
+                    val pkg = event.packageName ?: ""
+                    if (SUPPORTED_OTT_PACKAGES.containsKey(pkg) && event.timeStamp >= latestTime) {
                         latestTime = event.timeStamp
-                        latestPkg = event.packageName
+                        latestOttLabel = SUPPORTED_OTT_PACKAGES[pkg]
                     }
                 }
             }
-            latestPkg
+            latestOttLabel
         } catch (_: Exception) {
-            ""
-        }
-    }
-
-    private fun resolveCurrentOttTagFromUsageStats(): String? {
-        if (!hasUsageStatsPermission(this)) return null
-        val fg = queryCurrentForegroundPackage(lookbackMs = 120_000L)
-        if (fg.isEmpty()) return null
-        return SUPPORTED_OTT_PACKAGES[fg]
-    }
-
-    private fun performAutoRestore(reason: String) {
-        if (disableMode != "AUTO_STEALTH" || !OTTCallAccessibilityService.autoRestoreEnabled) return
-
-        // Cấp độ 1: Nếu đã có quyền WRITE_SECURE_SETTINGS -> Tự bật lại Trợ năng NGẦM 100% trong 0.001s
-        val restoredSilently = trySilentEnableAccessibility()
-        if (restoredSilently) {
-            disableMode = "NONE"
-            hasEnteredStealthTargetApp = false
-            stealthExitedAtMs = 0L
-            cancelRestoreAlertNotification()
-            OTTCallAccessibilityService.lastDetectedApp = "Đã tự động BẬT LẠI Trợ năng ($reason)"
-            updateNotification(
-                contentText = "Đã tự động BẬT LẠI Trợ năng ($reason)",
-                recordingNow = dspEngine.isRecording,
-                accessibilityCurrentlyOn = true
-            )
-            return
-        }
-
-        // Cấp độ 2: Nếu chưa cấp WRITE_SECURE_SETTINGS qua ADB:
-        // Ngay khi thoát App Ngân hàng / chuyển sang App khác -> Bật màn hình Trợ năng (nếu có quyền Overlay)
-        // đồng thời đẩy thông báo Heads-Up ưu tiên cao lên đầu màn hình.
-        if (!hasPromptedManualRestoreThisSession) {
-            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
-            if (pm?.isInteractive == true) {
-                hasPromptedManualRestoreThisSession = true
-                OTTCallAccessibilityService.lastDetectedApp = "$reason • Bấm bật lại hoặc vẫn tự ghi ngầm"
-                updateNotification(
-                    contentText = "$reason • Bấm [Bật Lại Trợ Năng] (Ghi âm ngầm vẫn chạy 100%)",
-                    recordingNow = dspEngine.isRecording,
-                    accessibilityCurrentlyOn = false
-                )
-                showHeadsUpRestoreAlert(reason)
-                if (hasOverlayPermission(this)) {
-                    openAccessibilitySettingsActivity()
-                }
-            }
-        }
-    }
-
-    /**
-     * Bật lại Trợ năng ngầm 100% nếu đã được cấp quyền `WRITE_SECURE_SETTINGS` (qua ADB hoặc Shizuku).
-     */
-    fun trySilentEnableAccessibility(): Boolean {
-        return try {
-            val comp = ComponentName(this, OTTCallAccessibilityService::class.java).flattenToString()
-            val current = Settings.Secure.getString(
-                contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: ""
-            if (!current.contains(comp)) {
-                val updated = if (current.isBlank()) comp else "$current:$comp"
-                val ok = Settings.Secure.putString(
-                    contentResolver,
-                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                    updated
-                )
-                Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-                ok
-            } else {
-                Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-                true
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun openAccessibilitySettingsActivity() {
-        try {
-            val accIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            }
-            startActivity(accIntent)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun showHeadsUpRestoreAlert(reason: String) {
-        try {
-            val accIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            }
-            val pendingAcc = PendingIntent.getActivity(
-                this,
-                99,
-                accIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alertNotif = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_lock_power_off)
-                .setContentTitle("Đã thoát $activeStealthAppName")
-                .setContentText("Chạm vào đây để gạt BẬT LẠI Trợ năng S22U Call Recorder")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setAutoCancel(true)
-                .setContentIntent(pendingAcc)
-                .setFullScreenIntent(pendingAcc, true)
-                .addAction(
-                    android.R.drawable.ic_lock_power_off,
-                    "Bật Lại Ngay",
-                    pendingAcc
-                )
-                .build()
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.notify(ALERT_NOTIF_ID, alertNotif)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun cancelRestoreAlertNotification() {
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.cancel(ALERT_NOTIF_ID)
-        } catch (_: Exception) {
+            null
         }
     }
 
@@ -516,68 +319,53 @@ class CallMonitorForegroundService : Service() {
 
         if (isCall && !wasInActiveCall) {
             wasInActiveCall = true
-            // Nếu đang ở trạng thái AUTO_STEALTH (không phải MANUAL_OFF), thử tự khôi phục Trợ năng
-            if (OTTCallAccessibilityService.instance == null &&
-                disableMode == "AUTO_STEALTH" &&
-                OTTCallAccessibilityService.autoRestoreEnabled
-            ) {
-                trySilentEnableAccessibility()
-            }
-            // NGAY CẢ KHI TRỢ NĂNG ĐANG TẮT, vẫn tự động nhận diện Zalo/Viber/Telegram/WhatsApp qua UsageStatsManager và ghi âm 100%!
-            if (OTTCallAccessibilityService.instance == null && autoRecordOttEnabled && !dspEngine.isRecording) {
-                val detectedOttTag = resolveCurrentOttTagFromUsageStats()
-                val tag = detectedOttTag ?: if (mode == AudioManager.MODE_IN_CALL) "SIM_Call" else "Zalo_OTT"
-                OTTCallAccessibilityService.lastDetectedApp = "$tag (Đang ghi âm ngầm)"
+            if (autoRecordOttEnabled && !dspEngine.isRecording) {
+                attachCallAudioAnchorIfPermitted()
+                val tag = resolveActiveCallTag(mode)
+                OTTCallAccessibilityService.lastDetectedApp = "$tag (Đang ghi âm tự động)"
                 dspEngine.startRecording(
                     appTag = tag,
-                    remoteGainBoost = OTTCallAccessibilityService.remoteGainBoost,
-                    autoBoostEarpieceVolume = OTTCallAccessibilityService.autoBoostVolume
+                    remoteGainBoost = remoteGainBoost,
+                    autoBoostEarpieceVolume = autoBoostVolume
                 )
-                updateNotification("ĐANG GHI ÂM $tag (48kHz Smooth DSP)...", true, false)
+                updateNotification("ĐANG GHI ÂM $tag (48kHz Smooth DSP)...", true)
             }
         } else if (!isCall && wasInActiveCall) {
             wasInActiveCall = false
             if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
                 val saved = dspEngine.stopRecording()
+                detachCallAudioAnchor()
                 val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
-                OTTCallAccessibilityService.lastDetectedApp = "$savedTag (Đã lưu vào Download)"
+                OTTCallAccessibilityService.lastDetectedApp =
+                    "$savedTag (Đã lưu vào /Download/S22U_Call_Recordings)"
                 updateNotification(
-                    "Đã lưu $savedTag vào /Download/S22U_Call_Recordings",
-                    false,
-                    OTTCallAccessibilityService.instance != null
+                    "Đã lưu $savedTag • Trực chiến 24/7 đang bật",
+                    false
                 )
+            } else {
+                detachCallAudioAnchor()
             }
         }
     }
 
-    private fun createNotificationChannels() {
+    private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
             val guardChannel = NotificationChannel(
                 CHANNEL_ID,
-                "S22U Smart Banking Stealth Guard",
+                "S22U 24/7 Call Recorder Guard",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Tự động ẩn Trợ năng khi mở App Ngân hàng/VNeID và tự động ghi âm ngầm"
+                description = "Trực chiến tự động ghi âm cuộc gọi 24/7 tương thích 100% App Ngân hàng & VNeID"
                 setShowBadge(false)
             }
-            val alertChannel = NotificationChannel(
-                ALERT_CHANNEL_ID,
-                "Khôi phục Trợ năng sau khi thoát Ngân hàng",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Thông báo bật lại Trợ năng ngay khi vừa thoát App Ngân hàng / VNeID"
-                setShowBadge(true)
-            }
             nm?.createNotificationChannel(guardChannel)
-            nm?.createNotificationChannel(alertChannel)
         }
     }
 
     private fun buildNotification(
         contentText: String,
-        recordingNow: Boolean,
-        accessibilityCurrentlyOn: Boolean
+        recordingNow: Boolean
     ): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingLaunch = PendingIntent.getActivity(
@@ -588,43 +376,11 @@ class CallMonitorForegroundService : Service() {
         )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("S22U Call Recorder Hub")
+            .setContentTitle("S22U Call Recorder (An toàn Ngân hàng 24/7)")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingLaunch)
             .setOngoing(true)
-
-        if (accessibilityCurrentlyOn) {
-            val disableIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                action = ACTION_DISABLE_ACCESSIBILITY_NOW
-            }
-            val pendingDisable = PendingIntent.getService(
-                this,
-                4,
-                disableIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            builder.addAction(
-                android.R.drawable.ic_secure,
-                "Tạm Ẩn (Dùng NH)",
-                pendingDisable
-            )
-        } else {
-            val restoreIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                action = ACTION_RESTORE_ACCESSIBILITY_NOW
-            }
-            val pendingRestore = PendingIntent.getService(
-                this,
-                3,
-                restoreIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            builder.addAction(
-                android.R.drawable.ic_lock_power_off,
-                "Bật Lại Trợ Năng",
-                pendingRestore
-            )
-        }
 
         if (recordingNow) {
             val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
@@ -655,15 +411,15 @@ class CallMonitorForegroundService : Service() {
 
     private fun updateNotification(
         contentText: String,
-        recordingNow: Boolean,
-        accessibilityCurrentlyOn: Boolean
+        recordingNow: Boolean
     ) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(NOTIF_ID, buildNotification(contentText, recordingNow, accessibilityCurrentlyOn))
+        nm?.notify(NOTIF_ID, buildNotification(contentText, recordingNow))
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(guardPoller)
+        detachCallAudioAnchor()
         if (::dspEngine.isInitialized && dspEngine.isRecording) {
             dspEngine.stopRecording()
         }

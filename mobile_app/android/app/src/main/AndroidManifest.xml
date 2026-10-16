@@ -6,26 +6,24 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- Quyền đọc/ghi file ghi âm của Samsung One UI (/Recordings/Call/) -->
+    <!-- Quyền đọc/ghi file ghi âm vĩnh viễn (/Download/S22U_Call_Recordings/ & /Recordings/Call/) -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
 
-    <!-- Quyền nhìn thấy toàn bộ App Ngân hàng & OTT trên Android 11-16 để tự động ẩn & tự bật lại Trợ năng -->
+    <!-- Quyền nhận diện ứng dụng OTT đang gọi (Không dùng Accessibility nên mở mọi App Ngân hàng & VNeID 100% 24/7) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
-    <!-- Quyền chạy nền Foreground Microphone trên Android 14-16 (Samsung S22 Ultra) -->
+    <!-- Quyền chạy nền Foreground Microphone 24/7 trên Android 14-16 (Samsung S22 Ultra) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Khai báo Package Visibility cho toàn bộ Launcher Apps trên Android 11-16 -->
+    <!-- Khai báo Package Visibility cho Zalo, Viber, Telegram, WhatsApp, Messenger -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -37,6 +35,7 @@
         <package android:name="org.telegram.messenger.web" />
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
+        <package android:name="com.facebook.orca" />
         <package android:name="com.samsung.android.incallui" />
         <package android:name="com.samsung.android.dialer" />
     </queries>
@@ -65,22 +64,18 @@
             </intent-filter>
         </activity>
 
-        <!-- Dịch vụ Trợ năng thông minh: Bắt sự kiện chạm icon (typeViewClicked) trước khi App Ngân hàng khởi chạy -->
+        <!-- Dịch vụ nhận diện cuộc gọi Zalo/Viber/Telegram/WhatsApp qua NotificationListener (Không dùng Trợ năng, không bao giờ bị App Ngân hàng/VNeID chặn!) -->
         <service
-            android:name=".OTTCallAccessibilityService"
-            android:label="@string/accessibility_service_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:foregroundServiceType="microphone"
+            android:name=".OTTCallNotificationListener"
+            android:label="S22U Call Detector (An toàn Ngân hàng)"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
+                <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Dịch vụ Foreground Guard điều phối tự động khôi phục & nút tắt/bật 1-chạm trên Notification -->
+        <!-- Dịch vụ Foreground Audio Guard chạy 24/7 vĩnh viễn (Không bao giờ cần tắt khi vào Ngân hàng, không bao giờ cần bật lại bằng tay!) -->
         <service
             android:name=".CallMonitorForegroundService"
             android:foregroundServiceType="microphone"

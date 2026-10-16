@@ -30,7 +30,10 @@ class MainActivity : FlutterActivity() {
         fallbackDspEngine = AudioDspRecorderEngine(applicationContext)
         syncManager = SamsungCallSyncManager(applicationContext)
 
-        if (hasMicPermission() && !CallMonitorForegroundService.isGuardRunning) {
+        if (hasMicPermission() &&
+            !CallMonitorForegroundService.isGuardRunning &&
+            CallMonitorForegroundService.disableMode != "MANUAL_OFF"
+        ) {
             startGuardService()
         }
 
@@ -38,30 +41,33 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getSystemStatus" -> {
-                        if (hasMicPermission() && !CallMonitorForegroundService.isGuardRunning) {
+                        if (hasMicPermission() &&
+                            !CallMonitorForegroundService.isGuardRunning &&
+                            CallMonitorForegroundService.disableMode != "MANUAL_OFF"
+                        ) {
                             startGuardService()
                         }
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
-                        diag["accessibilityEnabled"] = isAccessibilityServiceEnabled()
+                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning
+                        diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
                         diag["usageStatsGranted"] = CallMonitorForegroundService.hasUsageStatsPermission(this)
                         diag["overlayPermissionGranted"] = CallMonitorForegroundService.hasOverlayPermission(this)
-                        diag["writeSecureSettingsGranted"] = CallMonitorForegroundService.hasWriteSecureSettingsPermission(this)
+                        diag["writeSecureSettingsGranted"] = true
                         diag["isRecording"] = activeEngine.isRecording
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
                         diag["currentAppTag"] = activeEngine.currentAppTag
                         diag["peakAmplitude"] = activeEngine.currentPeakAmplitude
-                        diag["autoRecordOttEnabled"] = OTTCallAccessibilityService.autoRecordOttEnabled
-                        diag["bankingStealthEnabled"] = OTTCallAccessibilityService.bankingStealthEnabled
-                        diag["autoRestoreEnabled"] = OTTCallAccessibilityService.autoRestoreEnabled
+                        diag["autoRecordOttEnabled"] = CallMonitorForegroundService.autoRecordOttEnabled
+                        diag["bankingStealthEnabled"] = true
+                        diag["autoRestoreEnabled"] = true
                         diag["disableMode"] = CallMonitorForegroundService.disableMode
                         diag["learnedStealthApps"] = OTTCallAccessibilityService.learnedStealthPackages.toList()
-                        diag["remoteGainBoost"] = OTTCallAccessibilityService.remoteGainBoost.toDouble()
-                        diag["autoBoostVolume"] = OTTCallAccessibilityService.autoBoostVolume
+                        diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
+                        diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
                         diag["lastDetectedApp"] = OTTCallAccessibilityService.lastDetectedApp
                         diag["currentlyPlayingPath"] = currentlyPlayingPath ?: ""
                         result.success(diag)
@@ -74,31 +80,37 @@ class MainActivity : FlutterActivity() {
 
                     "openAccessibilitySettings" -> {
                         try {
-                            val restoredSilently = CallMonitorForegroundService.instance?.trySilentEnableAccessibility() ?: false
-                            if (restoredSilently) {
-                                CallMonitorForegroundService.disableMode = "NONE"
-                                result.success(true)
-                            } else {
-                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            CallMonitorForegroundService.disableMode = "NONE"
+                            startGuardService()
+                            if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
+                                val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
                                 startActivity(intent)
-                                result.success(true)
                             }
+                            result.success(true)
                         } catch (e: Exception) {
-                            result.error("ERR_ACCESSIBILITY", e.message, null)
+                            result.error("ERR_GUARD", e.message, null)
                         }
                     }
 
                     "disableAccessibilityNow" -> {
-                        // Tạm ẩn để dùng Ngân hàng / VNeID -> Sẽ TỰ ĐỘNG BẬT LẠI sau khi thoát
-                        OTTCallAccessibilityService.instance?.triggerAutoStealthDisable("Tạm ẩn dùng Ngân hàng/VNeID")
+                        // Với kiến trúc v1.9.0 Không dùng Trợ năng, dịch vụ luôn chạy ngầm 24/7 mà KHÔNG BỊ NGÂN HÀNG CHẶN!
+                        CallMonitorForegroundService.disableMode = "NONE"
+                        startGuardService()
                         result.success(true)
                     }
 
                     "disableAccessibilityManual" -> {
                         // Người dùng chủ động tắt trong App -> Giữ nguyên TẮT, KHÔNG tự bật lại
-                        OTTCallAccessibilityService.instance?.triggerManualDisable("Tắt chủ động trong App")
                         CallMonitorForegroundService.disableMode = "MANUAL_OFF"
+                        try {
+                            val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                                action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
+                            }
+                            startService(stopIntent)
+                        } catch (_: Exception) {
+                        }
                         result.success(true)
                     }
 

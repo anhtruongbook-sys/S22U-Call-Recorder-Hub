@@ -378,34 +378,13 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                       ),
                       onPressed: () async {
-                        await _channel.invokeMethod('disableAccessibilityNow');
-                        await _refreshStatusOnly();
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Đã TẠM ẨN Trợ năng! App sẽ tự động bật lại sau khi bạn thoát Ngân hàng/VNeID.',
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      icon: const Icon(Icons.account_balance_outlined, size: 15),
-                      label: const Text('Tạm ẩn dùng NH (Tự bật lại)', style: TextStyle(fontSize: 12)),
-                    ),
-                    TextButton.icon(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                      ),
-                      onPressed: () async {
                         await _channel.invokeMethod('disableAccessibilityManual');
                         await _refreshStatusOnly();
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
-                                'Đã TẮT CHỦ ĐỘNG Trợ năng! Hệ thống sẽ giữ nguyên trạng thái tắt, không tự bật lại.',
+                                'Đã TẮT CHỦ ĐỘNG chế độ tự động ghi âm! Hệ thống giữ nguyên trạng thái tắt theo ý bạn.',
                               ),
                             ),
                           );
@@ -833,15 +812,15 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
     required bool micGranted,
     required bool storageGranted,
   }) {
+    final bool notifGranted = _status['notificationListenerGranted'] == true;
     final bool usageGranted = _status['usageStatsGranted'] == true;
     final bool overlayGranted = _status['overlayPermissionGranted'] == true;
-    final bool writeSecureGranted = _status['writeSecureSettingsGranted'] == true;
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
         const Text(
-          'Thiết Lập Trọn Vẹn Trên Samsung S22 Ultra (Không Root)',
+          'Thiết Lập 1 Lần Duy Nhất — Chạy Tự Động 24/7 Vĩnh Viễn (Không Dùng Trợ Năng)',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 8),
@@ -872,15 +851,15 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
         ListTile(
           contentPadding: const EdgeInsets.symmetric(vertical: 4),
           leading: Icon(
-            accEnabled ? Icons.check_circle : Icons.error_outline,
-            color: accEnabled ? Colors.green : Colors.orange,
+            notifGranted ? Icons.check_circle : Icons.notifications_active_outlined,
+            color: notifGranted ? Colors.green : Colors.orange,
           ),
           title: const Text(
-            'Bước 2: Bật Trợ năng Thông minh (Tự ẩn & Tự học)',
+            'Bước 2: Bật "Truy cập Thông báo" (Thay thế hoàn toàn Trợ năng)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Tự động ẩn ngay khi chạm mở Ngân hàng, VNeID hoặc bất kỳ App nào yêu cầu tắt Trợ năng.',
+            'Nhận diện cuộc gọi & tên người gọi Zalo, Viber, Telegram, WhatsApp 24/7 mà KHÔNG DÙNG Trợ năng -> Mở VCB Digibank, MB, BIDV, VNeID mọi lúc không bao giờ bị chặn và KHÔNG BAO GIỜ phải bật lại bằng tay!',
             style: TextStyle(fontSize: 12.5),
           ),
           trailing: FilledButton.tonal(
@@ -888,39 +867,12 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
               await _channel.invokeMethod('openAccessibilitySettings');
               await _refreshStatusOnly();
             },
-            child: Text(accEnabled ? 'Đang chạy' : 'Kích hoạt'),
+            child: Text(notifGranted ? 'Đã bật 24/7' : 'Bật 1 lần'),
           ),
         ),
         const Divider(),
 
-        // Bước 3: Quyền nhận diện thời điểm thoát App Ngân hàng / VNeID (Usage Access)
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(vertical: 4),
-          leading: Icon(
-            usageGranted ? Icons.check_circle : Icons.autorenew,
-            color: usageGranted ? Colors.green : Colors.blue,
-          ),
-          title: const Text(
-            'Bước 3: Bật "Truy cập dữ liệu sử dụng" (BẮT BUỘC)',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            writeSecureGranted
-                ? 'Đã có Usage Access & WRITE_SECURE_SETTINGS: Tự bật lại Trợ năng NGẦM 100% khi thoát Ngân hàng!'
-                : 'Giúp hệ thống biết chính xác giây phút bạn thoát App Ngân hàng / chuyển sang App khác VÀ tự động ghi âm đúng tên Zalo/Viber/Telegram ngay cả khi Trợ năng đang tắt!',
-            style: const TextStyle(fontSize: 12.5),
-          ),
-          trailing: FilledButton.tonal(
-            onPressed: () async {
-              await _channel.invokeMethod('openUsageAccessSettings');
-              await _refreshStatusOnly();
-            },
-            child: Text(usageGranted ? 'Đã bật' : 'Bật ngay'),
-          ),
-        ),
-        const Divider(),
-
-        // Bước 4: Quyền Hiển thị trên ứng dụng khác (Để Android 16 cho phép tự bật màn hình khôi phục khi thoát NH)
+        // Bước 3
         ListTile(
           contentPadding: const EdgeInsets.symmetric(vertical: 4),
           leading: Icon(
@@ -928,11 +880,11 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
             color: overlayGranted ? Colors.green : Colors.blue,
           ),
           title: const Text(
-            'Bước 4: Bật "Hiển thị trên ứng dụng khác" (Android 16)',
+            'Bước 3: Bật "Hiển thị trên ứng dụng khác" (Neo âm thanh Android 16)',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           subtitle: const Text(
-            'Cho phép dịch vụ chạy ngầm trên Android 16 tự động bật bảng khôi phục Trợ năng ngay khi bạn vừa thoát App Ngân hàng sang App khác.',
+            'Giúp dịch vụ chạy ngầm được Android 16 ưu tiên quyền thu Microphone song song trong lúc đang gọi Zalo/Viber/Telegram (Chỉ bật 1 lần, không bao giờ tự tắt).',
             style: TextStyle(fontSize: 12.5),
           ),
           trailing: FilledButton.tonal(
@@ -940,7 +892,32 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> {
               await _channel.invokeMethod('openOverlaySettings');
               await _refreshStatusOnly();
             },
-            child: Text(overlayGranted ? 'Đã bật' : 'Bật ngay'),
+            child: Text(overlayGranted ? 'Đã bật' : 'Bật 1 lần'),
+          ),
+        ),
+        const Divider(),
+
+        // Bước 4
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(vertical: 4),
+          leading: Icon(
+            usageGranted ? Icons.check_circle : Icons.autorenew,
+            color: usageGranted ? Colors.green : Colors.blue,
+          ),
+          title: const Text(
+            'Bước 4: Bật "Truy cập dữ liệu sử dụng"',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          subtitle: const Text(
+            'Nhận diện chính xác ứng dụng OTT đang hiển thị trên màn hình (Chỉ bật 1 lần, không bị App Ngân hàng chặn).',
+            style: TextStyle(fontSize: 12.5),
+          ),
+          trailing: FilledButton.tonal(
+            onPressed: () async {
+              await _channel.invokeMethod('openUsageAccessSettings');
+              await _refreshStatusOnly();
+            },
+            child: Text(usageGranted ? 'Đã bật' : 'Bật 1 lần'),
           ),
         ),
         const Divider(),
