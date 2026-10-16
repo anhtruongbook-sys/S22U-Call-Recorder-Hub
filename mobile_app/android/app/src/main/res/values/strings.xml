@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">S22U Call Recorder</string>
+    <string name="accessibility_service_label">S22 Ultra OTT Call Recorder Engine</string>
+    <string name="accessibility_service_description">Cho phép tự động phát hiện và ghi âm 2 chiều cuộc gọi Zalo, Viber, Telegram, WhatsApp trên Samsung Galaxy S22 Ultra (Không cần Root) kết hợp đồng bộ ghi âm cuộc gọi SIM gốc của Samsung One UI.</string>
+</resources>
