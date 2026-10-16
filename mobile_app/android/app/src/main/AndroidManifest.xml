@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!-- Quyền Sinh trắc học Vân tay Siêu âm S22 Ultra (BiometricPrompt) -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+
+    <!-- Quyền tự khởi động ngầm khi bật máy hoặc khi có cuộc gọi đến dù đã đóng App -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- Quyền đọc/ghi file ghi âm vĩnh viễn (/Download/S22U_Call_Recordings/ & /Recordings/Call/) -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -64,22 +71,37 @@
             </intent-filter>
         </activity>
 
-        <!-- Dịch vụ nhận diện cuộc gọi Zalo/Viber/Telegram/WhatsApp qua NotificationListener (Không dùng Trợ năng, không bao giờ bị App Ngân hàng/VNeID chặn!) -->
+        <!-- Dịch vụ nhận diện cuộc gọi Zalo/Viber/Telegram/WhatsApp qua NotificationListener (Hệ điều hành Android giữ sống 24/7 kể cả khi vuốt đóng App) -->
         <service
             android:name=".OTTCallNotificationListener"
             android:label="S22U Call Detector (An toàn Ngân hàng)"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:stopWithTask="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
 
-        <!-- Dịch vụ Foreground Audio Guard chạy 24/7 vĩnh viễn (Không bao giờ cần tắt khi vào Ngân hàng, không bao giờ cần bật lại bằng tay!) -->
+        <!-- Dịch vụ Foreground Audio Guard với stopWithTask="false" (Vẫn tự động ghi âm 100% khi vuốt đóng App khỏi Đa nhiệm) -->
         <service
             android:name=".CallMonitorForegroundService"
             android:foregroundServiceType="microphone"
+            android:stopWithTask="false"
             android:exported="false" />
+
+        <!-- Bộ thu tín hiệu tự động kích hoạt khi khởi động lại máy hoặc có cuộc gọi đến lúc App đang tắt -->
+        <receiver
+            android:name=".CallBootBroadcastReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
 
         <!-- FileProvider hỗ trợ Chia sẻ (Share) trực tiếp file ghi âm .wav / .m4a -->
         <provider

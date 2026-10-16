@@ -4,17 +4,21 @@ import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.media.AudioRecordingConfiguration
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
 /**
- * Dịch vụ nhận diện cuộc gọi Zalo, Viber, Telegram, WhatsApp, Messenger qua Thông báo hệ thống
- * (`NotificationListenerService`) — HOÀN TOÀN KHÔNG DÙNG TRỢ NĂNG (ZERO ACCESSIBILITY):
- * - Không bao giờ bị VCB Digibank, MB Bank, BIDV, Techcombank, VNeID chặn!
- * - Không bao giờ bị Google Play Protect cảnh báo!
- * - Luôn bật 24/7 vĩnh viễn: Không cần tắt khi vào Ngân hàng và KHÔNG BAO GIỜ phải bật lại bằng tay!
+ * Dịch vụ Hệ thống Nhận diện Cuộc gọi (`NotificationListenerService` + Ngắt Phần cứng Audio):
+ * - Được hệ điều hành Android giữ kết nối 24/7 kể cả khi người dùng vuốt đóng (tắt) hoàn toàn App khỏi Đa nhiệm!
+ * - Khi có cuộc gọi đến/đi (Zalo, Viber, Telegram, WhatsApp, Messenger hoặc SIM) lúc App đang tắt:
+ *   tự động đánh thức `CallMonitorForegroundService` để ghi âm ngay lập tức!
+ * - HOÀN TOÀN KHÔNG DÙNG TRỢ NĂNG (`Zero-Accessibility`) -> An toàn 100% với mọi App Ngân hàng & VNeID.
  */
 class OTTCallNotificationListener : NotificationListenerService() {
 
@@ -51,15 +55,75 @@ class OTTCallNotificationListener : NotificationListenerService() {
         }
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var modeListener: AudioManager.OnModeChangedListener? = null
+    private val recCallback = object : AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
+            super.onRecordingConfigChanged(configs)
+            mainHandler.post {
+                onHardwareAudioInterrupt()
+            }
+        }
+    }
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         isConnected = true
+        registerHardwareWakeupInterrupts()
         ensureForegroundGuardRunning()
     }
 
     override fun onListenerDisconnected() {
         isConnected = false
+        unregisterHardwareWakeupInterrupts()
         super.onListenerDisconnected()
+    }
+
+    private fun registerHardwareWakeupInterrupts() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && modeListener == null) {
+                val l = AudioManager.OnModeChangedListener { _ ->
+                    mainHandler.post {
+                        onHardwareAudioInterrupt()
+                    }
+                }
+                am.addOnModeChangedListener(mainExecutor, l)
+                modeListener = l
+            }
+            am.registerAudioRecordingCallback(recCallback, mainHandler)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun unregisterHardwareWakeupInterrupts() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                modeListener?.let { am?.removeOnModeChangedListener(it) }
+            }
+            am?.unregisterAudioRecordingCallback(recCallback)
+        } catch (_: Exception) {
+        }
+        modeListener = null
+    }
+
+    /**
+     * Khi App đã bị vuốt tắt khỏi Đa nhiệm nhưng có cuộc gọi Zalo/SIM nổ ra:
+     * Ngắt phần cứng này tự động khởi chạy lại `CallMonitorForegroundService` và thu âm ngay lập tức!
+     */
+    private fun onHardwareAudioInterrupt() {
+        val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+        if (prefs.getString("disableMode", "NONE") == "MANUAL_OFF") return
+
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val mode = am.mode
+        if (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL) {
+            ensureForegroundGuardRunning()
+            CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
+        } else {
+            CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -114,11 +178,13 @@ class OTTCallNotificationListener : NotificationListenerService() {
     }
 
     private fun ensureForegroundGuardRunning() {
+        val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+        if (prefs.getString("disableMode", "NONE") == "MANUAL_OFF") return
         if (CallMonitorForegroundService.disableMode == "MANUAL_OFF") return
         if (!CallMonitorForegroundService.isGuardRunning) {
             try {
                 val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                    action = CallMonitorForegroundService.ACTION_START_GUARD
+                    action = CallMonitorForegroundService.ACTION_TRIGGER_CALL_CHECK
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     startForegroundService(svcIntent)

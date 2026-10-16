@@ -62,8 +62,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.1.0
-          name: "S22 Ultra Call Recorder Hub v2.1.0 (Broadcast Loudness 2-Stage AGC + Peak Normalizer + 0% Idle Battery)"
+          tag_name: v2.2.0
+          name: "S22 Ultra Call Recorder Hub v2.2.0 (App Lock: Fingerprint Default + 6-Digit PIN + Password + Closed-App Auto Wakeup)"
           body: |
             ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root)
             - **Gọi SIM thường**: Tự động đồng bộ file `.m4a` Lossless từ trình ghi âm phần cứng gốc của Samsung One UI (`/Recordings/Call/`).

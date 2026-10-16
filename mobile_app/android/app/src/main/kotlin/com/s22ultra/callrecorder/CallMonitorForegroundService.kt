@@ -138,6 +138,11 @@ class CallMonitorForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+        autoRecordOttEnabled = prefs.getBoolean("autoRecordOttEnabled", true)
+        remoteGainBoost = prefs.getFloat("remoteGainBoost", 2.2f)
+        autoBoostVolume = prefs.getBoolean("autoBoostVolume", true)
+        disableMode = prefs.getString("disableMode", "NONE") ?: "NONE"
         dspEngine = AudioDspRecorderEngine(applicationContext)
         createNotificationChannel()
         registerZeroBatteryHardwareCallbacks()
@@ -470,6 +475,25 @@ class CallMonitorForegroundService : Service() {
     ) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         nm?.notify(NOTIF_ID, buildNotification(contentText, recordingNow))
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Khi người dùng vuốt đóng App khỏi màn hình Đa nhiệm (Recent Apps):
+        // Nếu không phải tắt chủ động trong App, giữ nguyên dịch vụ Ngủ Đông để có cuộc gọi vẫn tự kích hoạt 100%!
+        if (disableMode != "MANUAL_OFF") {
+            try {
+                val restartIntent = Intent(applicationContext, CallMonitorForegroundService::class.java).apply {
+                    action = ACTION_TRIGGER_CALL_CHECK
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    applicationContext.startForegroundService(restartIntent)
+                } else {
+                    applicationContext.startService(restartIntent)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

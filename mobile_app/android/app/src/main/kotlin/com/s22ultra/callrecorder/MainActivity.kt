@@ -2,13 +2,17 @@ package com.s22ultra.callrecorder
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Build
+import android.os.CancellationSignal
 import android.os.Environment
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
@@ -18,20 +22,32 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
 
     private val CHANNEL = "com.s22ultra.callrecorder/native"
+    private val REC_PREFS = "s22u_recorder_prefs"
+    private val SEC_PREFS = "s22u_security_prefs"
+    private val HASH_SALT = "S22Ultra_Knox_Vault_2026_"
+
     private lateinit var fallbackDspEngine: AudioDspRecorderEngine
     private lateinit var syncManager: SamsungCallSyncManager
     private var mediaPlayer: MediaPlayer? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var currentlyPlayingPath: String? = null
+    private var biometricCancellationSignal: CancellationSignal? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         fallbackDspEngine = AudioDspRecorderEngine(applicationContext)
         syncManager = SamsungCallSyncManager(applicationContext)
+
+        val recPrefs = getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
+        CallMonitorForegroundService.autoRecordOttEnabled = recPrefs.getBoolean("autoRecordOttEnabled", true)
+        CallMonitorForegroundService.remoteGainBoost = recPrefs.getFloat("remoteGainBoost", 2.2f)
+        CallMonitorForegroundService.autoBoostVolume = recPrefs.getBoolean("autoBoostVolume", true)
+        CallMonitorForegroundService.disableMode = recPrefs.getString("disableMode", "NONE") ?: "NONE"
 
         if (hasMicPermission() &&
             !CallMonitorForegroundService.isGuardRunning &&
@@ -65,17 +81,98 @@ class MainActivity : FlutterActivity() {
                         diag["currentAppTag"] = activeEngine.currentAppTag
                         diag["peakAmplitude"] = activeEngine.currentPeakAmplitude
                         diag["autoRecordOttEnabled"] = CallMonitorForegroundService.autoRecordOttEnabled
-                        diag["bankingStealthEnabled"] = true
-                        diag["autoRestoreEnabled"] = true
                         diag["disableMode"] = CallMonitorForegroundService.disableMode
-                        diag["learnedStealthApps"] = emptyList<String>()
                         diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
                         diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
                         diag["lastDetectedApp"] = CallMonitorForegroundService.lastDetectedApp
                         diag["currentlyPlayingPath"] = currentlyPlayingPath ?: ""
+                        diag["security"] = getSecurityConfigMap()
                         result.success(diag)
                     }
 
+                    // ==================== QUẢN LÝ BẢO MẬT & KHÓA ỨNG DỤNG (PASSWORD / PIN 6 SỐ / VÂN TAY) ====================
+                    "getSecurityConfig" -> {
+                        result.success(getSecurityConfigMap())
+                    }
+
+                    "setPassword" -> {
+                        val pwd = call.argument<String>("password")?.trim() ?: ""
+                        if (pwd.isEmpty()) {
+                            result.error("INVALID_PWD", "Mật khẩu không được để trống", null)
+                            return@setMethodCallHandler
+                        }
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putString("passwordHash", sha256Hash(pwd))
+                            .putBoolean("lockEnabled", true)
+                            .putBoolean("autoLockOnSwitch", true)
+                            .apply()
+                        result.success(getSecurityConfigMap())
+                    }
+
+                    "setPin6" -> {
+                        val pin = call.argument<String>("pin")?.trim() ?: ""
+                        if (!pin.matches(Regex("^\\d{6}$"))) {
+                            result.error("INVALID_PIN", "Mã PIN phải gồm đúng 6 chữ số (0-9)", null)
+                            return@setMethodCallHandler
+                        }
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putString("pin6Hash", sha256Hash(pin))
+                            .putBoolean("lockEnabled", true)
+                            .putBoolean("autoLockOnSwitch", true)
+                            .apply()
+                        result.success(getSecurityConfigMap())
+                    }
+
+                    "setBiometricEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putBoolean("biometricEnabled", enabled)
+                            .apply()
+                        result.success(getSecurityConfigMap())
+                    }
+
+                    "setLockEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putBoolean("lockEnabled", enabled)
+                            .apply()
+                        result.success(getSecurityConfigMap())
+                    }
+
+                    "setAutoLockOnSwitch" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: true
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putBoolean("autoLockOnSwitch", enabled)
+                            .apply()
+                        result.success(getSecurityConfigMap())
+                    }
+
+                    "verifyPassword" -> {
+                        val input = call.argument<String>("password")?.trim() ?: ""
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        val savedHash = prefs.getString("passwordHash", "") ?: ""
+                        val ok = savedHash.isNotEmpty() && sha256Hash(input) == savedHash
+                        result.success(ok)
+                    }
+
+                    "verifyPin6" -> {
+                        val input = call.argument<String>("pin")?.trim() ?: ""
+                        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+                        val savedHash = prefs.getString("pin6Hash", "") ?: ""
+                        val ok = savedHash.isNotEmpty() && sha256Hash(input) == savedHash
+                        result.success(ok)
+                    }
+
+                    "authenticateBiometric" -> {
+                        triggerSamsungBiometricPrompt(result)
+                    }
+
+                    // ==================== QUẢN LÝ DỊCH VỤ GHI ÂM & DSP ====================
                     "requestPermissions" -> {
                         requestRuntimePermissions()
                         result.success(true)
@@ -84,6 +181,8 @@ class MainActivity : FlutterActivity() {
                     "openAccessibilitySettings" -> {
                         try {
                             CallMonitorForegroundService.disableMode = "NONE"
+                            getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
+                                .edit().putString("disableMode", "NONE").apply()
                             startGuardService()
                             if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
                                 val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
@@ -98,15 +197,17 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "disableAccessibilityNow" -> {
-                        // Với kiến trúc v1.9.0 Không dùng Trợ năng, dịch vụ luôn chạy ngầm 24/7 mà KHÔNG BỊ NGÂN HÀNG CHẶN!
                         CallMonitorForegroundService.disableMode = "NONE"
+                        getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
+                            .edit().putString("disableMode", "NONE").apply()
                         startGuardService()
                         result.success(true)
                     }
 
                     "disableAccessibilityManual" -> {
-                        // Người dùng chủ động tắt trong App -> Giữ nguyên TẮT, KHÔNG tự bật lại
                         CallMonitorForegroundService.disableMode = "MANUAL_OFF"
+                        getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
+                            .edit().putString("disableMode", "MANUAL_OFF").apply()
                         try {
                             val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                                 action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
@@ -149,10 +250,6 @@ class MainActivity : FlutterActivity() {
                         } catch (e: Exception) {
                             result.error("ERR_OVERLAY", e.message, null)
                         }
-                    }
-
-                    "clearLearnedStealthApps" -> {
-                        result.success(true)
                     }
 
                     "openSamsungCallSettings" -> {
@@ -202,9 +299,15 @@ class MainActivity : FlutterActivity() {
                         val autoOtt = call.argument<Boolean>("autoRecordOttEnabled") ?: true
                         val gain = call.argument<Double>("remoteGainBoost")?.toFloat() ?: 2.2f
                         val boostVol = call.argument<Boolean>("autoBoostVolume") ?: true
+                        val clampedGain = gain.coerceIn(1.0f, 4.0f)
                         CallMonitorForegroundService.autoRecordOttEnabled = autoOtt
-                        CallMonitorForegroundService.remoteGainBoost = gain.coerceIn(1.0f, 4.0f)
+                        CallMonitorForegroundService.remoteGainBoost = clampedGain
                         CallMonitorForegroundService.autoBoostVolume = boostVol
+                        getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
+                            .putBoolean("autoRecordOttEnabled", autoOtt)
+                            .putFloat("remoteGainBoost", clampedGain)
+                            .putBoolean("autoBoostVolume", boostVol)
+                            .apply()
                         result.success(true)
                     }
 
@@ -278,6 +381,103 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    private fun getSecurityConfigMap(): Map<String, Any> {
+        val prefs = getSharedPreferences(SEC_PREFS, Context.MODE_PRIVATE)
+        val hasPassword = !(prefs.getString("passwordHash", "").isNullOrEmpty())
+        val hasPin6 = !(prefs.getString("pin6Hash", "").isNullOrEmpty())
+        val lockEnabled = prefs.getBoolean("lockEnabled", false) && (hasPassword || hasPin6)
+        val bioAvailable = isBiometricAvailable()
+        val bioEnabled = prefs.getBoolean("biometricEnabled", false) && bioAvailable
+        val autoLockOnSwitch = prefs.getBoolean("autoLockOnSwitch", true)
+
+        // Khi bật Sinh trắc học vân tay -> Vân tay tự động làm mặc định!
+        val defaultMethod = when {
+            bioEnabled -> "BIOMETRIC"
+            hasPin6 -> "PIN6"
+            hasPassword -> "PASSWORD"
+            else -> "NONE"
+        }
+
+        return mapOf(
+            "lockEnabled" to lockEnabled,
+            "hasPassword" to hasPassword,
+            "hasPin6" to hasPin6,
+            "biometricAvailable" to bioAvailable,
+            "biometricEnabled" to bioEnabled,
+            "autoLockOnSwitch" to autoLockOnSwitch,
+            "defaultMethod" to defaultMethod
+        )
+    }
+
+    private fun isBiometricAvailable(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val bm = getSystemService(BiometricManager::class.java)
+                bm?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+            } else {
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun triggerSamsungBiometricPrompt(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            result.success(false)
+            return
+        }
+        try {
+            biometricCancellationSignal?.cancel()
+            val signal = CancellationSignal()
+            biometricCancellationSignal = signal
+
+            var responded = false
+            val prompt = BiometricPrompt.Builder(this)
+                .setTitle("Mở khóa S22U Call Recorder")
+                .setSubtitle("Xác thực cảm biến vân tay siêu âm S22 Ultra")
+                .setDescription("Chạm vân tay hoặc chọn nhập Mã PIN 6 số / Mật khẩu")
+                .setNegativeButton("Nhập Mã PIN / Mật khẩu", mainExecutor) { _, _ ->
+                    if (!responded) {
+                        responded = true
+                        result.success(false)
+                    }
+                }
+                .build()
+
+            prompt.authenticate(signal, mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(authResult: BiometricPrompt.AuthenticationResult?) {
+                    super.onAuthenticationSucceeded(authResult)
+                    if (!responded) {
+                        responded = true
+                        result.success(true)
+                    }
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                    super.onAuthenticationError(errorCode, errString)
+                    if (!responded) {
+                        responded = true
+                        result.success(false)
+                    }
+                }
+
+                override fun onAuthenticationFailed() {
+                    super.onAuthenticationFailed()
+                    // Giữ nguyên hộp thoại vân tay để người dùng chạm lại
+                }
+            })
+        } catch (_: Exception) {
+            result.success(false)
+        }
+    }
+
+    private fun sha256Hash(raw: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest((HASH_SALT + raw).toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
     private fun startGuardService() {
         try {
             val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
@@ -296,20 +496,15 @@ class MainActivity : FlutterActivity() {
         return try {
             val file = File(path)
             if (!file.exists()) return false
-            val uri: Uri = FileProvider.getUriForFile(
+            val uri = FileProvider.getUriForFile(
                 this,
-                "${applicationContext.packageName}.fileprovider",
+                "${packageName}.fileprovider",
                 file
             )
-            val mimeType = when {
-                file.name.endsWith(".wav", true) -> "audio/wav"
-                file.name.endsWith(".m4a", true) -> "audio/mp4"
-                file.name.endsWith(".mp3", true) -> "audio/mpeg"
-                else -> "audio/*"
-            }
+            val mime = if (file.name.lowercase().endsWith(".m4a")) "audio/mp4" else "audio/wav"
             val sha256 = fallbackDspEngine.computeSha256(file)
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = mimeType
+                type = mime
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, file.name)
                 putExtra(
@@ -351,7 +546,6 @@ class MainActivity : FlutterActivity() {
             val file = File(path)
             if (!file.exists()) return false
 
-            // Nếu là file .wav cũ bị thu nhỏ, tự động chuẩn hóa Peak lên 28.500 (-1.2 dBFS) ngay trước khi phát!
             if (file.name.lowercase().endsWith(".wav")) {
                 fallbackDspEngine.normalizeWavFileToBroadcastStandard(file)
             }
@@ -371,7 +565,7 @@ class MainActivity : FlutterActivity() {
                 prepare()
                 try {
                     loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
-                        setTargetGain(900) // Tăng cường +9.0 dB phần cứng khi nghe lại trong App
+                        setTargetGain(900)
                         enabled = true
                     }
                 } catch (_: Exception) {
@@ -444,6 +638,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        biometricCancellationSignal?.cancel()
         stopAudioPlayback()
         super.onDestroy()
     }
