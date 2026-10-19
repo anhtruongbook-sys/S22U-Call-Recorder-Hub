@@ -62,12 +62,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.5
-          name: "S22 Ultra Call Recorder Hub v2.9.5 (Fix Silent Conversation after Answer + Continuous Mono VOICE_RECOGNITION + Adaptive Noise-Floor Voice Boost)"
+          tag_name: v2.9.6
+          name: "S22 Ultra Call Recorder Hub v2.9.6 (Fix Real Zalo Call 0.0 Mute & Low Volume + Prevent Auto Bridge Self-Disable + Pop-Immune Normalizer)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.5)
-            - **Khắc Phục Triệt Để Lỗi Mất Tiếng Khi Nhấc Máy (`6.016s -> 0`)**: Giữ nguyên luồng `VOICE_RECOGNITION` (Mono) liên tục xuyên suốt từ lúc bắt đầu đến khi kết thúc cuộc gọi, loại bỏ `CHANNEL_IN_STEREO` và `AudioSource.MIC` (nguyên nhân khiến AudioPolicyService tắt tiếng về `0` khi Zalo vào chế độ đàm thoại), đồng thời tắt `AcousticEchoCanceler` cục bộ trên `sessionId` để không bị xóa tiếng loa thoại của người bên kia.
-            - **Gắn Neo `1x1 TYPE_ACCESSIBILITY_OVERLAY` & Khuếch Đại Giọng Nói Thích Nghi Nền Phòng**: Đảm bảo `isA11yOnTop() == true` 100% trên Android 16 / One UI 8; tự động giữ nguyên nền phòng yên tĩnh (`< 195`) không khuếch đại tiếng ồn và chỉ nâng giọng nói đàm thoại 2 chiều rõ nét chuẩn `.m4a` (`192kbps`).
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.6)
+            - **Chống Tự Tắt Mất Quyền Cầu Nối `S22U Call Bridge` (`disableSelf()`)**: Khắc phục triệt để lỗi Cầu nối `OTTCallAccessibilityService` tự gọi `disableSelf()` do nhận diện nhầm từ khóa trên màn hình chính khi máy chưa cấp quyền `WRITE_SECURE_SETTINGS`, khiến các cuộc gọi Zalo/SIM thực tế bị Android 16 khóa tiếng về `0.0` trong khi bấm "Ghi Thử Ngay" vẫn có tiếng.
+            - **Khuếch Đại Nhạy Cao Cho Cuộc Gọi Thực Tế (`MODE_IN_COMMUNICATION`) & Chống Xung Nổ Đầu File (`26.304`)**: Mở lại `AutomaticGainControl` phần cứng, hạ ngưỡng kích hoạt giọng nói cuộc gọi về `24..56` (nâng giọng nói cuộc gọi Zalo thực tế lên `8.8x..12.0x`), triệt tiêu xung nổ chuyển mạch phần cứng trong `210ms` đầu tiên và bỏ qua `0.45s` đầu / `0.25s` cuối khi chuẩn hóa `.m4a` (`22.500 / 32.767`).
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

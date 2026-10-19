@@ -233,9 +233,12 @@ class CallMonitorForegroundService : Service() {
                 // Người dùng vẫn đang ở trong App Ngân hàng -> Đợi thêm 3 giây rồi kiểm tra tiếp
                 mainHandler.postDelayed(this, 3000L)
             } else {
-                // Người dùng đã thoát App Ngân hàng -> Tự động bật lại Cầu nối thu âm và dừng kiểm tra (0% CPU)
-                enableEphemeralAccessibilityForCall(this@CallMonitorForegroundService)
+                // Người dùng đã thoát App Ngân hàng -> Tự động bật lại Cầu nối thu âm
+                enableEphemeralAccessibilityForCall(this@CallMonitorForegroundService, force = true)
                 lastDetectedApp = "Đã tự bật lại Cầu nối sau khi thoát App Ngân hàng (0% CPU)"
+                if (OTTCallAccessibilityService.instance == null) {
+                    mainHandler.postDelayed(this, 3000L)
+                }
             }
         }
     }
@@ -509,7 +512,6 @@ class CallMonitorForegroundService : Service() {
     }
 
     private fun detachCallAudioAnchor() {
-        OTTCallAccessibilityService.instance?.detachAccessibilityAudioAnchor()
         val view = audioAnchorView ?: return
         audioAnchorView = null
         try {

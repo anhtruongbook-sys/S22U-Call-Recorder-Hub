@@ -719,17 +719,19 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
             decoration: BoxDecoration(
-              color: Colors.orange.withOpacity(0.12),
+              color: Colors.redAccent.withOpacity(0.14),
               border: const Border(
-                left: BorderSide(color: Colors.orangeAccent, width: 3.5),
+                left: BorderSide(color: Colors.redAccent, width: 4.0),
               ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Cầu nối thu âm Zalo (S22U Call Bridge) đang TẮT — Bật 1 lần để thu âm (Bật xong khung này tự ẩn 100%, mở Ngân hàng tự tắt 0ms)',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                  '⚠️ CẦU NỐI ZALO (S22U Call Bridge) ĐANG TẮT!\n'
+                  '• Khi tắt: "Ghi Thử Ngay" trong App vẫn có tiếng, nhưng GỌI ZALO / SIM THẬT sẽ bị Android 16 khóa tiếng về 0!\n'
+                  '• Hãy bấm "Bật S22U Call Bridge" bên dưới (Bật 1 lần dùng vĩnh viễn, không tự tắt mất quyền nữa):',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, height: 1.4),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -738,6 +740,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                   children: [
                     FilledButton.icon(
                       style: FilledButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        foregroundColor: Colors.white,
                         visualDensity: VisualDensity.compact,
                       ),
                       onPressed: () async {
@@ -745,7 +749,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                         await _refreshStatusOnly();
                       },
                       icon: const Icon(Icons.accessibility_new, size: 16),
-                      label: const Text('Bật S22U Call Bridge'),
+                      label: const Text('Bật S22U Call Bridge Ngay'),
                     ),
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(

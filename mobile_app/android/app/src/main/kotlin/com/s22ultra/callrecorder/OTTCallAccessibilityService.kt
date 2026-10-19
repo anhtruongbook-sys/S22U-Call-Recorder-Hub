@@ -119,19 +119,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
 
         fun isBankingOrProtectedPackage(pkg: String): Boolean {
             if (isSystemOrSafePackage(pkg)) return false
-            if (BANKING_AND_GOV_PACKAGES.contains(pkg)) return true
-            val lower = pkg.lowercase()
-            return BANKING_KEYWORDS.any { lower.contains(it) }
-        }
-
-        fun isBankingIconLabelClicked(labelText: String): Boolean {
-            if (labelText.isBlank()) return false
-            val lower = labelText.lowercase().trim()
-            if (lower.contains("s22u") || lower.contains("call recorder") || lower.contains("trợ năng")) {
-                return false
-            }
-            return BANKING_KEYWORDS.any { lower.contains(it) } ||
-                    lower == "mb" || lower == "acb" || lower == "vib" || lower == "shb" || lower == "ocb" || lower == "msb"
+            return BANKING_AND_GOV_PACKAGES.contains(pkg)
         }
     }
 
@@ -200,6 +188,9 @@ class OTTCallAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // Gắn sẵn neo 1x1 TYPE_ACCESSIBILITY_OVERLAY ngay khi kết nối (0% CPU/Pin)
+        // để AudioPolicyService của Android 16 luôn cấp quyền thu âm 2 chiều ở 0ms khi có cuộc gọi Zalo/SIM
+        attachAccessibilityAudioAnchor()
 
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val mode = am?.mode ?: AudioManager.MODE_NORMAL
@@ -217,10 +208,8 @@ class OTTCallAccessibilityService : AccessibilityService() {
                 hasVoipStream)
 
         if (dspEngine.isRecording) {
-            attachAccessibilityAudioAnchor()
             dspEngine.requestAccessibilityStreamUpgrade()
         } else if (inCallNow) {
-            attachAccessibilityAudioAnchor()
             startCallRecordingFromAccessibilityBridge(mode)
         }
     }
@@ -245,7 +234,6 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     fun stopCallRecordingAndKeepReady(): Map<String, Any?>? {
-        detachAccessibilityAudioAnchor()
         return if (dspEngine.isRecording) {
             dspEngine.stopRecording()
         } else {
@@ -257,31 +245,24 @@ class OTTCallAccessibilityService : AccessibilityService() {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
 
-        // TẦNG 1: Chỉ bắt sự kiện chạm vào Icon App Ngân hàng / VNeID khi đang ở Màn hình chính (Launcher) và KHÔNG trong cuộc gọi
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && !dspEngine.isRecording && isLauncherPackage(pkg)) {
-            val clickedText = buildString {
-                event.text?.forEach { append(it).append(" ") }
-                if (event.contentDescription != null) append(event.contentDescription)
-            }
-            if (isBankingIconLabelClicked(clickedText)) {
-                engageInstantBankingStealth("Icon ${clickedText.trim()}")
-                return
-            }
-        }
-
-        // TẦNG 2: Bắt sự kiện chuyển cửa sổ của bất kỳ App Ngân hàng / VNeID nào
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && pkg.isNotEmpty()) {
-            if (isBankingOrProtectedPackage(pkg)) {
+            // CHỈ tự động tắt tạm thời khi:
+            // 1. Đúng 100% package Ngân hàng / VNeID trong danh sách xác thực
+            // 2. Máy ĐÃ cấp quyền WRITE_SECURE_SETTINGS (để tự động bật lại được sau khi thoát Ngân hàng).
+            // Nếu chưa cấp WRITE_SECURE_SETTINGS, TUYỆT ĐỐI KHÔNG tự gọi disableSelf() làm mất quyền ghi âm Zalo!
+            if (isBankingOrProtectedPackage(pkg) && CallMonitorForegroundService.hasWriteSecureSettings(this)) {
                 engageInstantBankingStealth(pkg)
                 return
             }
             if (CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.containsKey(pkg)) {
+                attachAccessibilityAudioAnchor()
                 CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
             }
         }
     }
 
     private fun engageInstantBankingStealth(bankingTarget: String) {
+        if (!CallMonitorForegroundService.hasWriteSecureSettings(this)) return
         detachAccessibilityAudioAnchor()
         if (dspEngine.isRecording) {
             dspEngine.stopRecording()
