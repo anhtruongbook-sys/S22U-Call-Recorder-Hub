@@ -113,10 +113,18 @@ class CallMonitorForegroundService : Service() {
         }
 
         fun hasWriteSecureSettings(context: Context): Boolean {
-            return try {
-                context.checkCallingOrSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
-                        android.content.pm.PackageManager.PERMISSION_GRANTED
+            try {
+                if (context.checkCallingOrSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    return true
+                }
             } catch (_: Exception) {
+            }
+            return try {
+                Settings.Secure.putInt(context.contentResolver, "s22u_call_bridge_ready", 1)
+                true
+            } catch (_: Throwable) {
                 false
             }
         }

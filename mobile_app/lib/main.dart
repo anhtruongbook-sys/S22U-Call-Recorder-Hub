@@ -680,9 +680,6 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final playingPath = (_status['currentlyPlayingPath'] ?? '').toString();
     final cs = Theme.of(context).colorScheme;
 
-    final writeSecureGranted = _status['writeSecureSettingsGranted'] == true;
-    final accEnabled = _status['accessibilityEnabled'] == true;
-
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
@@ -715,105 +712,6 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               ],
             ),
           ),
-
-        // KHỐI KÍCH HOẠT TRỰC TIẾP TRÊN ĐIỆN THOẠI (KHÔNG CẦN MÁY TÍNH)
-        Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-          decoration: BoxDecoration(
-            color: writeSecureGranted
-                ? Colors.green.withOpacity(0.10)
-                : Colors.blue.withOpacity(0.10),
-            border: Border(
-              left: BorderSide(
-                color: writeSecureGranted ? Colors.greenAccent : Colors.lightBlueAccent,
-                width: 3.5,
-              ),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                writeSecureGranted
-                    ? '✅ ĐÃ KÍCH HOẠT TỰ ĐỘNG 100% (Mặc định TẮT Trợ năng • Dùng mọi App Ngân hàng)'
-                    : '📱 KÍCH HOẠT TRỰC TIẾP TRÊN ĐIỆN THOẠI (KHÔNG CẦN MÁY TÍNH)',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                writeSecureGranted
-                    ? '• Trạng thái Cầu nối hiện tại: ${accEnabled ? "ĐANG BẬT TRONG CUỘC GỌI" : "ĐANG TẮT 100% (An toàn tuyệt đối cho VCB, BIDV, Techcombank, MB, VNeID)"}.'
-                    : '• CÁCH 1 (1 Chạm dùng ngay - Không cài thêm gì): Nhấn "Bật Cầu Nối Trước Khi Gọi" bên dưới. Ngay khi cúp máy hoặc mở bất kỳ App Ngân hàng nào, App sẽ TỰ ĐỘNG TẮT Trợ năng 100% trong 0ms!\n'
-                      '• CÁCH 2 (Tự động bật/tắt ngầm vĩnh viễn ngay trên ĐT qua Gỡ lỗi không dây): Sao chép lệnh -> Mở Brevent + Gỡ lỗi không dây chạy 1 lần (30 giây). Xong có thể gỡ Brevent ngay!',
-                style: const TextStyle(fontSize: 12.2, height: 1.42),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  FilledButton.icon(
-                    onPressed: () async {
-                      await _channel.invokeMethod('openAccessibilitySettings');
-                      await _refreshStatusOnly();
-                    },
-                    icon: const Icon(Icons.bolt, size: 16),
-                    label: Text(
-                      accEnabled
-                          ? 'Đang Bật Cầu Nối (Tự Tắt Khi Cúp Máy)'
-                          : 'Cách 1: Bật Cầu Nối Trước Khi Gọi (Tự Tắt Khi Xong)',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                  if (accEnabled)
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        await _channel.invokeMethod('disableAccessibilityNow');
-                        await _refreshStatusOnly();
-                      },
-                      icon: const Icon(Icons.power_settings_new, size: 15),
-                      label: const Text('Tắt Ngay Lập Tức', style: TextStyle(fontSize: 12)),
-                    ),
-                  if (!writeSecureGranted) ...[
-                    FilledButton.tonalIcon(
-                      onPressed: () async {
-                        await Clipboard.setData(
-                          const ClipboardData(
-                            text: 'pm grant com.s22ultra.callrecorder android.permission.WRITE_SECURE_SETTINGS',
-                          ),
-                        );
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Đã sao chép lệnh cấp quyền vào bộ nhớ tạm!'),
-                            ),
-                          );
-                        }
-                      },
-                      icon: const Icon(Icons.copy, size: 15),
-                      label: const Text('1. Copy Lệnh Tự Động', style: TextStyle(fontSize: 12)),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        await _channel.invokeMethod('openBreventApp');
-                      },
-                      icon: const Icon(Icons.terminal, size: 15),
-                      label: const Text('2. Mở Brevent (CH Play)', style: TextStyle(fontSize: 12)),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        await _channel.invokeMethod('openDeveloperSettings');
-                      },
-                      icon: const Icon(Icons.wifi_tethering, size: 15),
-                      label: const Text('3. Mở Gỡ Lỗi Không Dây', style: TextStyle(fontSize: 12)),
-                    ),
-                  ],
-                ],
-              ),
-            ],
-          ),
-        ),
 
         // Bảng điều khiển Thu âm & Trạng thái Ngủ Đông 0% Pin
         Container(
@@ -1299,38 +1197,44 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
 
         // ==================== PHẦN 2: QUYỀN HỆ THỐNG & DỊCH VỤ NGẦM ====================
         const Text(
-          'Cấu Hình Quyền Hệ Thống S22 Ultra (Không Dùng Trợ Năng)',
+          'Cấu Hình Quyền Hệ Thống S22 Ultra',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 10),
         _buildStepItem(
           stepNum: '1',
-          title: 'Dịch vụ Tự động Ghi âm Ngầm 24/7 (0% Pin khi chờ)',
-          description:
-              'Hoạt động hoàn toàn độc lập, KHÔNG DÙNG Trợ năng (An toàn 100% với VCB Digibank, VNeID).\n'
-              'Tự động kích hoạt ghi âm kể cả khi bạn đã vuốt đóng (tắt) hoàn toàn ứng dụng khỏi màn hình Đa nhiệm.',
-          isDone: guardEnabled,
-          actionLabel: guardEnabled ? 'Đang Bật (Chạy ngầm 0% Pin)' : 'Bật Dịch Vụ Ghi Âm Ngầm',
+          title: 'Dịch vụ Tự động Ghi âm Ngầm 24/7 (Mặc định TẮT Trợ năng • An toàn Ngân hàng)',
+          description: (_status['writeSecureSettingsGranted'] == true)
+              ? '✅ Đã kích hoạt tự động 100% (Mặc định TẮT ngoài cuộc gọi • Mở mọi App Ngân hàng & VNeID bình thường).'
+              : 'Chỉ tự động bật Cầu nối âm thanh khi bắt đầu cuộc gọi và tự động TẮT trong 0ms ngay khi cúp máy hoặc mở App Ngân hàng.',
+          isDone: (_status['writeSecureSettingsGranted'] == true) || guardEnabled,
+          actionLabel: (_status['writeSecureSettingsGranted'] == true)
+              ? 'Đã Kích Hoạt Tự Động 100%'
+              : 'Bật Cầu Nối Trước Khi Gọi',
           onTap: () async {
             await _channel.invokeMethod('openAccessibilitySettings');
             await _refreshStatusOnly();
           },
-          secondaryLabel: guardEnabled ? 'Tắt chủ động (Giữ TẮT)' : null,
-          onSecondaryTap: guardEnabled
-              ? () async {
-                  await _channel.invokeMethod('disableAccessibilityManual');
-                  await _refreshStatusOnly();
-                }
-              : null,
+          secondaryLabel: (_status['writeSecureSettingsGranted'] == true)
+              ? null
+              : 'Copy Lệnh Brevent',
+          onSecondaryTap: (_status['writeSecureSettingsGranted'] == true)
+              ? null
+              : () async {
+                  await Clipboard.setData(
+                    const ClipboardData(
+                      text: 'pm grant com.s22ultra.callrecorder android.permission.WRITE_SECURE_SETTINGS',
+                    ),
+                  );
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Đã sao chép lệnh cấp quyền vào bộ nhớ tạm!'),
+                      ),
+                    );
+                  }
+                },
         ),
-        if (disableMode == 'MANUAL_OFF' && !guardEnabled)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              '⚠️ Bạn đã bấm "Tắt chủ động" nên ứng dụng sẽ giữ nguyên trạng thái TẮT cho tới khi bạn bấm Bật lại.',
-              style: TextStyle(fontSize: 12, color: Colors.amber.shade400),
-            ),
-          ),
         const Divider(),
         _buildStepItem(
           stepNum: '2',
