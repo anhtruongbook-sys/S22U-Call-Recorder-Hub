@@ -119,7 +119,25 @@ class OTTCallAccessibilityService : AccessibilityService() {
 
         fun isBankingOrProtectedPackage(pkg: String): Boolean {
             if (isSystemOrSafePackage(pkg)) return false
-            return BANKING_AND_GOV_PACKAGES.contains(pkg)
+            if (BANKING_AND_GOV_PACKAGES.contains(pkg)) return true
+            val lower = pkg.lowercase()
+            return BANKING_KEYWORDS.any { lower.contains(it) }
+        }
+
+        fun isBankingIconLabelClicked(labelText: String): Boolean {
+            val clean = labelText.trim()
+            // Tên icon ứng dụng trên màn hình chính luôn ngắn (2..32 ký tự), tránh bắt nhầm widget dọn RAM ("500 MB")
+            if (clean.length !in 2..32) return false
+            val lower = clean.lowercase()
+            if (lower.contains("s22u") || lower.contains("call recorder") || lower.contains("trợ năng")) {
+                return false
+            }
+            if (Regex("\\d+\\s*mb\\b").containsMatchIn(lower)) {
+                return false
+            }
+            return BANKING_KEYWORDS.any { lower.contains(it) } ||
+                    lower == "mb" || lower == "mbbank" || lower == "acb" || lower == "vib" ||
+                    lower == "shb" || lower == "ocb" || lower == "msb"
         }
     }
 
@@ -188,9 +206,6 @@ class OTTCallAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        // Gắn sẵn neo 1x1 TYPE_ACCESSIBILITY_OVERLAY ngay khi kết nối (0% CPU/Pin)
-        // để AudioPolicyService của Android 16 luôn cấp quyền thu âm 2 chiều ở 0ms khi có cuộc gọi Zalo/SIM
-        attachAccessibilityAudioAnchor()
 
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val mode = am?.mode ?: AudioManager.MODE_NORMAL
@@ -207,9 +222,12 @@ class OTTCallAccessibilityService : AccessibilityService() {
                 mode == AudioManager.MODE_IN_CALL ||
                 hasVoipStream)
 
+        // TUYỆT ĐỐI KHÔNG gắn neo Overlay khi không có cuộc gọi để không làm App Ngân hàng báo lỗi!
         if (dspEngine.isRecording) {
+            attachAccessibilityAudioAnchor()
             dspEngine.requestAccessibilityStreamUpgrade()
         } else if (inCallNow) {
+            attachAccessibilityAudioAnchor()
             startCallRecordingFromAccessibilityBridge(mode)
         }
     }
@@ -234,6 +252,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     fun stopCallRecordingAndKeepReady(): Map<String, Any?>? {
+        detachAccessibilityAudioAnchor()
         return if (dspEngine.isRecording) {
             dspEngine.stopRecording()
         } else {
@@ -245,30 +264,38 @@ class OTTCallAccessibilityService : AccessibilityService() {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
 
+        // TẦNG 1: Bắt ngay khoảnh khắc chạm vào Icon App Ngân hàng / VNeID trên Màn hình chính (Launcher)
+        // Lập tức gọi disableSelf() trong 0ms (kể cả khi chưa cấp WRITE_SECURE_SETTINGS) để App Ngân hàng KHÔNG BAO GIỜ báo lỗi!
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && !dspEngine.isRecording && isLauncherPackage(pkg)) {
+            val clickedText = buildString {
+                event.text?.forEach { append(it).append(" ") }
+                if (event.contentDescription != null) append(event.contentDescription)
+            }
+            if (isBankingIconLabelClicked(clickedText)) {
+                engageInstantBankingStealth("Icon ${clickedText.trim()}")
+                return
+            }
+        }
+
+        // TẦNG 2: Bắt sự kiện chuyển cửa sổ của bất kỳ App Ngân hàng / VNeID nào -> Tắt Trợ năng tức thì trong 0ms!
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && pkg.isNotEmpty()) {
-            // CHỈ tự động tắt tạm thời khi:
-            // 1. Đúng 100% package Ngân hàng / VNeID trong danh sách xác thực
-            // 2. Máy ĐÃ cấp quyền WRITE_SECURE_SETTINGS (để tự động bật lại được sau khi thoát Ngân hàng).
-            // Nếu chưa cấp WRITE_SECURE_SETTINGS, TUYỆT ĐỐI KHÔNG tự gọi disableSelf() làm mất quyền ghi âm Zalo!
-            if (isBankingOrProtectedPackage(pkg) && CallMonitorForegroundService.hasWriteSecureSettings(this)) {
+            if (isBankingOrProtectedPackage(pkg)) {
                 engageInstantBankingStealth(pkg)
                 return
             }
             if (CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.containsKey(pkg)) {
-                attachAccessibilityAudioAnchor()
                 CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
             }
         }
     }
 
     private fun engageInstantBankingStealth(bankingTarget: String) {
-        if (!CallMonitorForegroundService.hasWriteSecureSettings(this)) return
         detachAccessibilityAudioAnchor()
         if (dspEngine.isRecording) {
             dspEngine.stopRecording()
         }
         CallMonitorForegroundService.lastDetectedApp =
-            "Đã tự tắt Trợ năng 0ms khi mở $bankingTarget (Sẽ tự bật lại khi thoát)"
+            "Đã tự tắt Trợ năng 0ms khi mở $bankingTarget (An toàn 100% Ngân hàng)"
         CallMonitorForegroundService.onBankingStealthEngaged(this)
         safelyDisableSelfNow()
     }

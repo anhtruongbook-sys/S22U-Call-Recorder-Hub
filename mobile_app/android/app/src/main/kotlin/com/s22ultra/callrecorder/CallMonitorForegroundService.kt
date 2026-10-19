@@ -211,7 +211,7 @@ class CallMonitorForegroundService : Service() {
 
         fun onBankingStealthEngaged(context: Context) {
             disableEphemeralAccessibilityAfterCall(context)
-            instance?.scheduleAutoRestoreAfterBankingExit()
+            instance?.onBankingStealthTriggeredInternal()
         }
     }
 
@@ -228,24 +228,35 @@ class CallMonitorForegroundService : Service() {
             if (disableMode == "MANUAL_OFF" || !hasWriteSecureSettings(this@CallMonitorForegroundService)) {
                 return
             }
-            val fgPkg = queryLatestForegroundPackage(15_000L)
-            if (fgPkg != null && OTTCallAccessibilityService.isBankingOrProtectedPackage(fgPkg)) {
-                // Người dùng vẫn đang ở trong App Ngân hàng -> Đợi thêm 3 giây rồi kiểm tra tiếp
-                mainHandler.postDelayed(this, 3000L)
+            if (!hasUsageStatsPermission(this@CallMonitorForegroundService)) {
+                // Nếu chưa cấp Usage Stats, TUYỆT ĐỐI KHÔNG tự bật lại theo hẹn giờ khi người dùng có thể vẫn đang ở trong App Ngân hàng.
+                // Cầu nối sẽ được bật lại ngay khi bắt đầu cuộc gọi Zalo/SIM hoặc khi mở lại App S22U Call Recorder.
+                return
+            }
+            val fgPkg = queryLatestForegroundPackage(600_000L)
+            if (fgPkg == null || OTTCallAccessibilityService.isBankingOrProtectedPackage(fgPkg)) {
+                // Người dùng VẪN ĐANG ở trong App Ngân hàng -> Đợi thêm 4 giây rồi kiểm tra tiếp, tuyệt đối chưa bật lại!
+                mainHandler.postDelayed(this, 4000L)
             } else {
-                // Người dùng đã thoát App Ngân hàng -> Tự động bật lại Cầu nối thu âm
+                // Đã xác nhận 100% người dùng thoát App Ngân hàng ra Màn hình chính / ứng dụng khác -> Tự động bật lại Cầu nối!
                 enableEphemeralAccessibilityForCall(this@CallMonitorForegroundService, force = true)
                 lastDetectedApp = "Đã tự bật lại Cầu nối sau khi thoát App Ngân hàng (0% CPU)"
+                updateNotification("Đã tự bật lại Cầu nối Zalo • Đang Ngủ Đông (0.0% CPU)", false)
                 if (OTTCallAccessibilityService.instance == null) {
-                    mainHandler.postDelayed(this, 3000L)
+                    mainHandler.postDelayed(this, 3500L)
                 }
             }
         }
     }
 
-    fun scheduleAutoRestoreAfterBankingExit() {
+    fun onBankingStealthTriggeredInternal() {
         mainHandler.removeCallbacks(bankingRestoreRunnable)
-        mainHandler.postDelayed(bankingRestoreRunnable, 3500L)
+        if (hasWriteSecureSettings(this)) {
+            updateNotification("Đã tạm tắt Cầu nối để dùng Ngân hàng (Tự bật lại khi thoát)", false)
+            mainHandler.postDelayed(bankingRestoreRunnable, 4000L)
+        } else {
+            updateNotification("Đã tắt Cầu nối cho Ngân hàng • Chạm để bật lại khi gọi Zalo", false)
+        }
     }
 
     private fun queryLatestForegroundPackage(windowMs: Long): String? {
@@ -512,6 +523,7 @@ class CallMonitorForegroundService : Service() {
     }
 
     private fun detachCallAudioAnchor() {
+        OTTCallAccessibilityService.instance?.detachAccessibilityAudioAnchor()
         val view = audioAnchorView ?: return
         audioAnchorView = null
         try {
@@ -648,7 +660,7 @@ class CallMonitorForegroundService : Service() {
         )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("S22U Call Recorder (Không Trợ Năng • 0% Pin)")
+            .setContentTitle("S22U Call Recorder (0ms An Toàn Ngân Hàng • 0% Pin)")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingLaunch)
@@ -667,6 +679,18 @@ class CallMonitorForegroundService : Service() {
             )
             builder.addAction(android.R.drawable.ic_media_pause, "Dừng & Lưu", pendingStop)
         } else {
+            if (!OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                val a11yIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val pendingA11y = PendingIntent.getActivity(
+                    this,
+                    3,
+                    a11yIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                builder.addAction(android.R.drawable.ic_menu_preferences, "Bật Cầu Nối Zalo", pendingA11y)
+            }
             val recIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                 action = ACTION_QUICK_RECORD
             }

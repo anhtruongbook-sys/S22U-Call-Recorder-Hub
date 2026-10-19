@@ -728,9 +728,9 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '⚠️ CẦU NỐI ZALO (S22U Call Bridge) ĐANG TẮT!\n'
-                  '• Khi tắt: "Ghi Thử Ngay" trong App vẫn có tiếng, nhưng GỌI ZALO / SIM THẬT sẽ bị Android 16 khóa tiếng về 0!\n'
-                  '• Hãy bấm "Bật S22U Call Bridge" bên dưới (Bật 1 lần dùng vĩnh viễn, không tự tắt mất quyền nữa):',
+                  '⚠️ CẦU NỐI ZALO (S22U Call Bridge) ĐANG TẮT (Chế độ Tàng hình App Ngân hàng)!\n'
+                  '• Cầu nối tự động TẮT trong 0ms khi mở App Ngân hàng / VNeID để không bao giờ báo lỗi.\n'
+                  '• Trước khi gọi Zalo/SIM, hãy bấm "Bật S22U Call Bridge Ngay" (hoặc chạy lệnh Brevent 1 lần để App tự động Bật/Tắt ngầm 100%):',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, height: 1.4),
                 ),
                 const SizedBox(height: 8),
