@@ -88,9 +88,7 @@ class MainActivity : FlutterActivity() {
                         diag["disableMode"] = CallMonitorForegroundService.disableMode
                         diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
                         diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
-                        diag["lastDetectedApp"] = OTTCallAccessibilityService.lastDetectedApp
-                            .takeIf { it.isNotEmpty() && it != "Chưa có cuộc gọi" }
-                            ?: CallMonitorForegroundService.lastDetectedApp
+                        diag["lastDetectedApp"] = CallMonitorForegroundService.lastDetectedApp
                         diag["currentlyPlayingPath"] = currentlyPlayingPath ?: ""
                         diag["security"] = getSecurityConfigMap()
                         result.success(diag)
