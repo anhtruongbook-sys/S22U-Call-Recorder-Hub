@@ -609,10 +609,6 @@ class MainActivity : FlutterActivity() {
             val file = File(path)
             if (!file.exists()) return false
 
-            if (file.name.lowercase().endsWith(".wav")) {
-                fallbackDspEngine.normalizeWavFileToBroadcastStandard(file)
-            }
-
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -626,13 +622,6 @@ class MainActivity : FlutterActivity() {
                     currentlyPlayingPath = null
                 }
                 prepare()
-                try {
-                    loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
-                        setTargetGain(750)
-                        enabled = true
-                    }
-                } catch (_: Exception) {
-                }
                 start()
             }
             currentlyPlayingPath = path
