@@ -62,12 +62,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.4
-          name: "S22 Ultra Call Recorder Hub v2.9.4 (Dual-Mic Stereo Top-Earpiece Pickup + Pure Linear Hardware NS/AGC + 192kbps .m4a)"
+          tag_name: v2.9.5
+          name: "S22 Ultra Call Recorder Hub v2.9.5 (Fix Silent Conversation after Answer + Continuous Mono VOICE_RECOGNITION + Adaptive Noise-Floor Voice Boost)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.4)
-            - **Thu Âm Kép 2 Mic (`Dual-Mic Stereo Top-Earpiece Pickup`)**: Kích hoạt đồng thời cả **Mic Đỉnh máy (cách Loa thoại Earpiece chỉ 8mm)** và **Mic Đáy máy** trên S22 Ultra để bắt trực tiếp âm thanh loa thoại mà không cần đẩy Gain phần mềm.
-            - **Âm Thanh Tuyến Tính Nguyên Bản (`Pure Linear Hardware NS/AGC`)**: Sử dụng trực tiếp `NoiseSuppressor` + `AutomaticGainControl` phần cứng của chip Qualcomm Snapdragon, loại bỏ 100% hiện tượng sôi nền/thở nền do bơm Gain biến thiên, mã hóa chuẩn `.m4a` (`AAC-LC 192kbps, 48kHz`).
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.5)
+            - **Khắc Phục Triệt Để Lỗi Mất Tiếng Khi Nhấc Máy (`6.016s -> 0`)**: Giữ nguyên luồng `VOICE_RECOGNITION` (Mono) liên tục xuyên suốt từ lúc bắt đầu đến khi kết thúc cuộc gọi, loại bỏ `CHANNEL_IN_STEREO` và `AudioSource.MIC` (nguyên nhân khiến AudioPolicyService tắt tiếng về `0` khi Zalo vào chế độ đàm thoại), đồng thời tắt `AcousticEchoCanceler` cục bộ trên `sessionId` để không bị xóa tiếng loa thoại của người bên kia.
+            - **Gắn Neo `1x1 TYPE_ACCESSIBILITY_OVERLAY` & Khuếch Đại Giọng Nói Thích Nghi Nền Phòng**: Đảm bảo `isA11yOnTop() == true` 100% trên Android 16 / One UI 8; tự động giữ nguyên nền phòng yên tĩnh (`< 195`) không khuếch đại tiếng ồn và chỉ nâng giọng nói đàm thoại 2 chiều rõ nét chuẩn `.m4a` (`192kbps`).
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

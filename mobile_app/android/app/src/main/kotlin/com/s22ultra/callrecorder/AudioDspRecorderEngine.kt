@@ -110,9 +110,8 @@ class AudioDspRecorderEngine(private val context: Context) {
     }
 
     /**
-     * Cập nhật tên người gọi Tiếng Việt (ví dụ từ `Zalo_OTT` sang `Zalo_Trương_Thành_Long`).
-     * Nếu trước đó đang là nhãn chung (`Zalo_OTT`, `Zalo`, `SIM_Call`) và chuyển sang tên người gọi cụ thể
-     * khi đầu dây bên kia vừa nhấc máy, đánh dấu mốc bắt đầu đàm thoại để cắt phần đổ chuông đầu file.
+     * Cập nhật tên người gọi Tiếng Việt (ví dụ từ `Zalo_OTT` sang `Zalo_FA_Mẹ_Hoan`).
+     * Chỉ cập nhật nhãn tên file, KHÔNG đánh dấu mốc bắt máy khi mới hiện thông báo đổ chuông.
      */
     @Synchronized
     fun updateActiveCallTag(newTag: String) {
@@ -120,12 +119,7 @@ class AudioDspRecorderEngine(private val context: Context) {
         val safeNew = sanitizeVietnameseFileName(newTag)
         val safeOld = sanitizeVietnameseFileName(currentAppTag)
         if (safeNew == safeOld || safeNew == "Zalo_OTT") return
-
-        val wasGenericTag = (safeOld == "Zalo_OTT" || safeOld == "Zalo" || safeOld == "SIM_Call")
         currentAppTag = newTag
-        if (wasGenericTag) {
-            markCallAnsweredRequested = true
-        }
     }
 
     @Volatile
@@ -138,7 +132,9 @@ class AudioDspRecorderEngine(private val context: Context) {
     }
 
     /**
-     * Được gọi khi thông báo Zalo chuyển sang trạng thái "Đang gọi thoại" / có đồng hồ đếm giây (đã nhấc máy).
+     * Được gọi đúng khoảnh khắc thông báo Zalo chuyển sang trạng thái "Đang gọi thoại" / có đồng hồ đếm giây (đã nhấc máy).
+     * Đánh dấu mốc `markCallAnsweredRequested = true` để cắt bỏ đoạn chờ đổ chuông trước khi nhấc máy,
+     * đồng thời giữ nguyên phiên AudioRecord đang chạy ổn định (tuyệt đối không đóng/hủy luồng đang thu tốt).
      */
     @Synchronized
     fun notifyCallConnectedAndTrimPreRing(newTag: String) {
@@ -150,15 +146,24 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
         }
         markCallAnsweredRequested = true
-        upgradeToAccessibilityRequested = true
     }
 
-    private fun openCleanAudioRecord(source: Int, sampleRate: Int, channelConfig: Int): AudioRecord? {
+    /**
+     * Mở luồng thu âm chuẩn `CHANNEL_IN_MONO` + `VOICE_RECOGNITION` (6):
+     * - Trên Samsung S22 Ultra (Android 16 / One UI 8), `AudioPolicyService::updateUidStates_l()` CHỈ cho phép
+     *   `AUDIO_SOURCE_VOICE_RECOGNITION` (6) ở chế độ `CHANNEL_IN_MONO` thu âm song song với cuộc gọi VoIP/Zalo.
+     * - Tắt `AcousticEchoCanceler` cục bộ trên `sessionId` của riêng phiên ghi âm này (`enabled = false`) để chip DSP
+     *   không xóa mất tiếng người bên kia phát ra từ Loa thoại (Earpiece), đồng thời bật `NoiseSuppressor` phần cứng lọc tạp âm.
+     */
+    private fun openCleanMonoVoiceRecord(source: Int, sampleRate: Int): Pair<AudioRecord, Boolean>? {
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
         if (minBufSize <= 0) return null
         val bufferSize = minBufSize * 6
-        val activeCtx: Context = OTTCallAccessibilityService.instance ?: context
+        val a11yService = OTTCallAccessibilityService.instance
+        a11yService?.attachAccessibilityAudioAnchor()
+        val activeCtx: Context = a11yService ?: context
         return try {
             val candidate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 AudioRecord.Builder()
@@ -179,17 +184,18 @@ class AudioDspRecorderEngine(private val context: Context) {
             if (candidate.state == AudioRecord.STATE_INITIALIZED) {
                 try {
                     val sessionId = candidate.audioSessionId
-                    // Sử dụng trực tiếp bộ lọc tạp âm (NoiseSuppressor) và cân bằng âm lượng tự động (AGC)
-                    // tích hợp trong chip phần cứng Qualcomm Snapdragon của S22 Ultra (trong trẻo như Máy ghi âm gốc Samsung).
+                    if (AcousticEchoCanceler.isAvailable()) {
+                        AcousticEchoCanceler.create(sessionId)?.apply { enabled = false }
+                    }
+                    if (AutomaticGainControl.isAvailable()) {
+                        AutomaticGainControl.create(sessionId)?.apply { enabled = false }
+                    }
                     if (NoiseSuppressor.isAvailable()) {
                         NoiseSuppressor.create(sessionId)?.apply { enabled = true }
                     }
-                    if (AutomaticGainControl.isAvailable()) {
-                        AutomaticGainControl.create(sessionId)?.apply { enabled = true }
-                    }
                 } catch (_: Exception) {
                 }
-                candidate
+                Pair(candidate, a11yService != null)
             } else {
                 candidate.release()
                 null
@@ -199,50 +205,26 @@ class AudioDspRecorderEngine(private val context: Context) {
         }
     }
 
-    private fun openBestDualOrMonoAudioRecord(source: Int, sampleRate: Int): Pair<AudioRecord, Int>? {
-        // Ưu tiên mở CHANNEL_IN_STEREO (2 kênh) để kích hoạt đồng thời cả Mic Đỉnh máy (cách Loa thoại Earpiece chỉ 8mm)
-        // lẫn Mic Đáy máy trên Samsung Galaxy S22 Ultra; tự động fallback về CHANNEL_IN_MONO nếu nguồn không hỗ trợ Stereo.
-        val stereoRec = openCleanAudioRecord(source, sampleRate, AudioFormat.CHANNEL_IN_STEREO)
-        if (stereoRec != null) {
-            return Pair(stereoRec, 2)
-        }
-        val monoRec = openCleanAudioRecord(source, sampleRate, AudioFormat.CHANNEL_IN_MONO)
-        if (monoRec != null) {
-            return Pair(monoRec, 1)
-        }
-        return null
-    }
-
     @Synchronized
     fun startRecording(
         appTag: String,
-        remoteGainBoost: Float = 1.5f,
+        remoteGainBoost: Float = 1.8f,
         autoBoostEarpieceVolume: Boolean = false
     ): String? {
         if (isRecording) return currentFilePath
 
         val preferredRates = intArrayOf(48000, 16000, 44100)
-        // Chỉ dùng VOICE_RECOGNITION (6) và MIC (1) (để dành VOICE_COMMUNICATION (7) nhận diện chính xác cuộc gọi Zalo/VoIP)
-        val cleanSources = intArrayOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            MediaRecorder.AudioSource.MIC
-        )
-
         var recorder: AudioRecord? = null
-        var selectedChannels = 1
+        var openedWithA11y = false
         var selectedSampleRate = 48000
-        var selectedSourceIdx = 0
 
         outer@ for (rate in preferredRates) {
-            for (idx in cleanSources.indices) {
-                val opened = openBestDualOrMonoAudioRecord(cleanSources[idx], rate)
-                if (opened != null) {
-                    recorder = opened.first
-                    selectedChannels = opened.second
-                    selectedSampleRate = rate
-                    selectedSourceIdx = idx
-                    break@outer
-                }
+            val opened = openCleanMonoVoiceRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, rate)
+            if (opened != null) {
+                recorder = opened.first
+                openedWithA11y = opened.second
+                selectedSampleRate = rate
+                break@outer
             }
         }
 
@@ -268,21 +250,19 @@ class AudioDspRecorderEngine(private val context: Context) {
         currentAppTag = appTag
         startTimeMs = System.currentTimeMillis()
         markCallAnsweredRequested = false
+        upgradeToAccessibilityRequested = false
         isRecording = true
 
         val activeRecorder = recorder
-        val activeChannels = selectedChannels
+        val initialA11yBound = openedWithA11y
         val finalRate = selectedSampleRate
-        val startSourceIdx = selectedSourceIdx
 
         recordingThread = Thread {
             writeWavContinuousWithAnswerBookmark(
                 initialRecorder = activeRecorder,
-                initialChannels = activeChannels,
+                initialOpenedWithA11y = initialA11yBound,
                 initialOutFile = outFile,
                 sampleRate = finalRate,
-                initialSourceIdx = startSourceIdx,
-                cleanSources = cleanSources,
                 userGainSetting = remoteGainBoost
             )
         }.apply {
@@ -322,26 +302,25 @@ class AudioDspRecorderEngine(private val context: Context) {
     }
 
     /**
-     * Thu âm Tuyến Tính Nguyên Bản (Pure Linear Studio Audio + Dual-Mic Stereo Top-Earpiece Pickup):
-     * - Thu đồng thời Mic Đỉnh máy (cách Loa thoại Earpiece chỉ 8mm) + Mic Đáy máy ở chế độ Stereo,
-     *   trộn thông minh ưu tiên Mic Đỉnh (bắt rõ tiếng loa trong tự nhiên mà không cần kích Gain phần mềm).
-     * - Loại bỏ 100% hiện tượng "thở nền / xào xạc" do tự động bơm Gain (Dynamic Gain Pumping).
+     * Thu âm 2 Chiều Liên Tục `VOICE_RECOGNITION` (Mono) + Lọc Tạp Âm Thích Nghi Theo Nền Phòng (Adaptive Noise-Floor Voice Boost):
+     * - Tuyệt đối không dùng `CHANNEL_IN_STEREO` và không bao giờ chuyển sang `AudioSource.MIC` (tránh bị `AudioPolicyService` tắt tiếng về 0).
+     * - Tuyệt đối không hủy `activeRecorder` khi đầu dây bên kia nhấc máy (`notifyCallConnectedAndTrimPreRing`).
+     * - Phân biệt chính xác nền ồn phòng (`noiseFloor ~ 140..180`) và giọng nói đàm thoại (`> 210`):
+     *   + Khi không có người nói (`voiceEnv <= noiseFloor * 1.45`): giữ gain `0.80f` (nền tĩnh sạch, không bao giờ rồ tiếng ồn nền).
+     *   + Khi có tiếng người nói ở đầu dây bên kia (`voiceEnv > noiseFloor * 1.45`): nâng mượt giọng nói lên `2.8x` rõ nét.
      */
     private fun writeWavContinuousWithAnswerBookmark(
         initialRecorder: AudioRecord,
-        initialChannels: Int,
+        initialOpenedWithA11y: Boolean,
         initialOutFile: File,
         sampleRate: Int,
-        initialSourceIdx: Int,
-        cleanSources: IntArray,
         userGainSetting: Float
     ) {
         var activeRecorder = initialRecorder
-        var activeChannels = initialChannels
-        var currentSourceIdx = initialSourceIdx
+        var openedWithA11yContext = initialOpenedWithA11y
         var outFile = initialOutFile
 
-        val pcmBuffer = ShortArray(4096)
+        val pcmBuffer = ShortArray(2048)
         val chunkBytes = ByteArray(pcmBuffer.size * 2)
         var totalAudioBytes = 0L
         var overallPeakRecorded = 0
@@ -349,17 +328,21 @@ class AudioDspRecorderEngine(private val context: Context) {
         var answeredByteOffset = 0L
         var peakAfterAnswer = 0
 
-        var consecutiveExactZeroBuffers = 0
+        var consecutiveSilentBuffers = 0
         var recoveryAttempts = 0
 
         val normalizedSlider = userGainSetting.coerceIn(1.0f, 4.0f)
-        // Hệ số khuếch đại tuyến tính cố định (Mặc định slider = 1.5f -> linearGain = 1.05f nguyên bản, không bơm nhiễu nền!)
-        val linearGain = 0.85f + (normalizedSlider - 1.0f) * 0.40f
+        val maxVoiceBoost = (1.6f + (normalizedSlider - 1.0f) * 1.4f).coerceIn(2.2f, 4.5f)
 
-        // Chỉ lọc bỏ DC Offset & tiếng ù hạ âm (< 135Hz), giữ nguyên 100% dải âm sắc tự nhiên của giọng nói
         var prevRaw = 0f
         var prevHp = 0f
-        val hpAlpha = if (sampleRate >= 44100) 0.982f else 0.945f
+        var prevLp = 0f
+        val hpAlpha = if (sampleRate >= 44100) 0.984f else 0.950f
+        val lpAlpha = if (sampleRate >= 44100) 0.58f else 0.78f
+
+        var voiceEnv = 0f
+        var noiseFloor = 145f
+        var smoothedGain = 1.0f
 
         try {
             FileOutputStream(outFile).use { fos ->
@@ -374,52 +357,72 @@ class AudioDspRecorderEngine(private val context: Context) {
 
                         if (markCallAnsweredRequested) {
                             markCallAnsweredRequested = false
-                            val maxRingingBytes = sampleRate.toLong() * 2L * 25L
-                            if (answeredByteOffset == 0L && totalAudioBytes in 1L..maxRingingBytes) {
+                            val maxRingingBytes = sampleRate.toLong() * 2L * 60L // tối đa 60 giây chờ bắt máy
+                            if (totalAudioBytes in 1L..maxRingingBytes) {
                                 answeredByteOffset = totalAudioBytes
                                 peakAfterAnswer = 0
                             }
                         }
 
-                        val frameCount = if (activeChannels == 2) (readCount / 2) else readCount
+                        for (i in 0 until readCount) {
+                            val rawShort = pcmBuffer[i].toInt()
+                            val absRaw = abs(rawShort)
+                            if (absRaw > maxRawInBuffer) maxRawInBuffer = absRaw
 
-                        for (frameIdx in 0 until frameCount) {
-                            val monoFloat: Float = if (activeChannels == 2) {
-                                val s0 = pcmBuffer[frameIdx * 2].toInt()
-                                val s1 = pcmBuffer[frameIdx * 2 + 1].toInt()
-                                val a0 = abs(s0)
-                                val a1 = abs(s1)
-                                val maxCh = if (a0 > a1) a0 else a1
-                                if (maxCh > maxRawInBuffer) maxRawInBuffer = maxCh
+                            val x = rawShort.toFloat()
 
-                                // Trên S22 Ultra, khi bạn nói trực tiếp vào Mic đáy, 1 kênh sẽ vọt rất cao (> 4500)
-                                // trong khi khi người bên kia nói qua Loa thoại đỉnh máy, Mic đỉnh thu trực tiếp ở khoảng cách 8mm.
-                                // Cân bằng thông minh giữa 2 Mic mà không làm sôi nền:
-                                when {
-                                    a0 > 4500 && a0 > a1 * 2 -> s0 * 0.50f + s1 * 0.85f
-                                    a1 > 4500 && a1 > a0 * 2 -> s1 * 0.50f + s0 * 0.85f
-                                    else -> (s0 + s1) * 0.68f
-                                }
-                            } else {
-                                val s = pcmBuffer[frameIdx].toInt()
-                                val a = abs(s)
-                                if (a > maxRawInBuffer) maxRawInBuffer = a
-                                s.toFloat()
-                            }
-
-                            // Lọc bỏ DC Offset & tiếng ù hạ âm (< 135Hz)
-                            val hp = hpAlpha * (prevHp + monoFloat - prevRaw)
-                            prevRaw = monoFloat
+                            // Bước 1: Lọc bỏ DC Offset & tiếng ù tần số thấp (< 120Hz)
+                            val hp = hpAlpha * (prevHp + x - prevRaw)
+                            prevRaw = x
                             prevHp = hp
 
-                            var outVal = hp * linearGain
+                            // Bước 2: Lọc mượt gai nhiễu tần số cao (> 6.5kHz)
+                            val cleanSample = prevLp + lpAlpha * (hp - prevLp)
+                            prevLp = cleanSample
 
-                            // Giới hạn mềm (Soft-Knee Limiter) ở ngưỡng 18000 chống chói tai khi nói sát Mic
+                            val absIn = abs(cleanSample)
+
+                            // Bước 3: Theo dõi đường bao giọng nói (voiceEnv) & nền ồn phòng thực tế (noiseFloor)
+                            voiceEnv = if (absIn > voiceEnv) {
+                                voiceEnv + 0.018f * (absIn - voiceEnv)
+                            } else {
+                                voiceEnv + 0.0010f * (absIn - voiceEnv)
+                            }
+
+                            if (absIn < noiseFloor) {
+                                noiseFloor += 0.005f * (absIn - noiseFloor)
+                            } else if (absIn < noiseFloor * 1.6f) {
+                                noiseFloor += 0.00015f * (absIn - noiseFloor)
+                            }
+                            noiseFloor = noiseFloor.coerceIn(50f, 220f)
+
+                            val voiceThreshold = (noiseFloor * 1.45f).coerceAtLeast(195f)
+
+                            // Bước 4: Chỉ khuếch đại khi tín hiệu là GIỌNG NÓI vượt ngưỡng ồn phòng (voiceThreshold)
+                            val desiredGain: Float = when {
+                                voiceEnv <= voiceThreshold -> 0.80f
+                                voiceEnv < 3200f -> {
+                                    val t = ((voiceEnv - voiceThreshold) / 350f).coerceIn(0f, 1f)
+                                    0.80f + t * (maxVoiceBoost - 0.80f)
+                                }
+                                voiceEnv < 8500f -> {
+                                    val t = ((voiceEnv - 3200f) / 5300f).coerceIn(0f, 1f)
+                                    maxVoiceBoost - t * (maxVoiceBoost - 1.25f)
+                                }
+                                else -> 1.25f
+                            }
+
+                            val gainStep = if (desiredGain < smoothedGain) 0.015f else 0.0020f
+                            smoothedGain += gainStep * (desiredGain - smoothedGain)
+
+                            var outVal = cleanSample * smoothedGain
+
+                            // Bước 5: Giới hạn mềm (Soft-Knee Limiter) ở ngưỡng 21500
                             val absOut = abs(outVal)
-                            if (absOut > 18000f) {
+                            if (absOut > 21500f) {
                                 val signVal = if (outVal >= 0f) 1f else -1f
-                                val excess = absOut - 18000f
-                                val softCompressed = 18000f + 6000f * (excess / (excess + 6000f))
+                                val excess = absOut - 21500f
+                                val softCompressed = 21500f + 7500f * (excess / (excess + 7500f))
                                 outVal = signVal * softCompressed
                             }
 
@@ -428,8 +431,8 @@ class AudioDspRecorderEngine(private val context: Context) {
                             if (absFinal > maxOutInBuffer) maxOutInBuffer = absFinal
 
                             val finalShort = finalInt.toShort()
-                            chunkBytes[frameIdx * 2] = (finalShort.toInt() and 0x00FF).toByte()
-                            chunkBytes[frameIdx * 2 + 1] = ((finalShort.toInt() shr 8) and 0x00FF).toByte()
+                            chunkBytes[i * 2] = (finalShort.toInt() and 0x00FF).toByte()
+                            chunkBytes[i * 2 + 1] = ((finalShort.toInt() shr 8) and 0x00FF).toByte()
                         }
 
                         currentPeakAmplitude = maxOutInBuffer
@@ -440,16 +443,22 @@ class AudioDspRecorderEngine(private val context: Context) {
                             peakAfterAnswer = maxOutInBuffer
                         }
 
-                        val bytesToWrite = frameCount * 2
+                        val bytesToWrite = readCount * 2
                         if (bytesToWrite > 0) {
                             fos.write(chunkBytes, 0, bytesToWrite)
                             totalAudioBytes += bytesToWrite
                         }
 
-                        if (upgradeToAccessibilityRequested) {
+                        // Chỉ nâng cấp luồng nếu ban đầu mở khi OTTCallAccessibilityService chưa kịp kết nối
+                        val shouldUpgradeToA11y = (upgradeToAccessibilityRequested || !openedWithA11yContext) &&
+                                (!openedWithA11yContext && OTTCallAccessibilityService.instance != null)
+                        if (upgradeToAccessibilityRequested && openedWithA11yContext) {
                             upgradeToAccessibilityRequested = false
-                            val upgraded = openBestDualOrMonoAudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate)
-                                ?: openBestDualOrMonoAudioRecord(MediaRecorder.AudioSource.MIC, sampleRate)
+                        }
+
+                        if (shouldUpgradeToA11y) {
+                            upgradeToAccessibilityRequested = false
+                            val upgraded = openCleanMonoVoiceRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate)
                             if (upgraded != null) {
                                 try {
                                     activeRecorder.stop()
@@ -460,18 +469,23 @@ class AudioDspRecorderEngine(private val context: Context) {
                                 } catch (_: Exception) {
                                 }
                                 activeRecorder = upgraded.first
-                                activeChannels = upgraded.second
+                                openedWithA11yContext = upgraded.second
                                 activeRecorder.startRecording()
                                 prevRaw = 0f
                                 prevHp = 0f
+                                prevLp = 0f
                             }
                         } else if (maxRawInBuffer <= 5) {
-                            consecutiveExactZeroBuffers++
-                            if (consecutiveExactZeroBuffers >= 18 && recoveryAttempts < 8) {
-                                consecutiveExactZeroBuffers = 0
+                            consecutiveSilentBuffers++
+                            if (consecutiveSilentBuffers >= 12 && recoveryAttempts < 24) {
+                                consecutiveSilentBuffers = 0
                                 recoveryAttempts++
-                                currentSourceIdx = (currentSourceIdx + 1) % cleanSources.size
-                                val reopened = openBestDualOrMonoAudioRecord(cleanSources[currentSourceIdx], sampleRate)
+                                if (OTTCallAccessibilityService.instance == null) {
+                                    CallMonitorForegroundService.enableEphemeralAccessibilityForCall(context, force = true)
+                                }
+                                OTTCallAccessibilityService.instance?.attachAccessibilityAudioAnchor()
+                                // BẮT BUỘC chỉ mở lại VOICE_RECOGNITION (6) chuẩn Mono (tuyệt đối không chuyển sang MIC)
+                                val reopened = openCleanMonoVoiceRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate)
                                 if (reopened != null) {
                                     try {
                                         activeRecorder.stop()
@@ -482,14 +496,15 @@ class AudioDspRecorderEngine(private val context: Context) {
                                     } catch (_: Exception) {
                                     }
                                     activeRecorder = reopened.first
-                                    activeChannels = reopened.second
+                                    openedWithA11yContext = reopened.second
                                     activeRecorder.startRecording()
                                     prevRaw = 0f
                                     prevHp = 0f
+                                    prevLp = 0f
                                 }
                             }
                         } else {
-                            consecutiveExactZeroBuffers = 0
+                            consecutiveSilentBuffers = 0
                         }
                     }
                 }
@@ -508,9 +523,9 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
 
             if (outFile.exists() && totalAudioBytes > 0L) {
-                val minConversationBytes = sampleRate.toLong() * 2L * 5L / 2L // 2.5 giây
+                val minConversationBytes = sampleRate.toLong() * 2L * 2L // tối thiểu 2.0 giây đàm thoại
                 val conversationBytes = totalAudioBytes - answeredByteOffset
-                if (answeredByteOffset > 0L && conversationBytes >= minConversationBytes && peakAfterAnswer >= 25) {
+                if (answeredByteOffset > 0L && conversationBytes >= minConversationBytes && peakAfterAnswer >= 35) {
                     if (trimLeadingPreAnswerBytes(outFile, answeredByteOffset, conversationBytes)) {
                         totalAudioBytes = conversationBytes
                         overallPeakRecorded = peakAfterAnswer
@@ -532,8 +547,12 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
                 }
 
+                // Chuẩn hóa âm lượng giọng nói rõ ràng (tối đa 3.2x lên mức 19.500), giữ nguyên nền tĩnh (< 190) không khuếch đại
+                if (overallPeakRecorded in 180..19000) {
+                    normalizeWavFileToBroadcastStandard(outFile, overallPeakRecorded)
+                }
+
                 // Chuyển đổi trực tiếp sang định dạng chuẩn Studio .m4a (AAC-LC 192kbps MPEG-4)
-                // KHÔNG gọi normalizeWavFileToBroadcastStandard để bảo toàn 100% nền tĩnh sạch sẽ như Máy ghi âm Samsung!
                 val m4aFile = encodeWavToM4a(outFile, sampleRate)
                 if (m4aFile != null && m4aFile.exists() && m4aFile.length() > 128L) {
                     try {
@@ -801,9 +820,9 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
                 }
 
-                if (peak < 450 || peak >= 12500) return false
+                if (peak < 180 || peak >= 19000) return false
 
-                val scale = (14500f / peak.toFloat()).coerceIn(1.05f, 1.85f)
+                val scale = (19500f / peak.toFloat()).coerceIn(1.05f, 3.2f)
                 var readPos = 44L
                 var remaining = dataLen
 
@@ -819,20 +838,20 @@ class AudioDspRecorderEngine(private val context: Context) {
                         val hi = buf[idx + 1].toInt()
                         val sample = ((hi shl 8) or lo).toShort().toInt()
                         val absSample = abs(sample)
-                        // Không bao giờ khuếch đại nền tĩnh / tạp âm nhỏ (< 220) khi chuẩn hóa
+                        // Không khuếch đại nền tĩnh / tạp âm nhỏ (< 170) khi chuẩn hóa
                         val effectiveScale = when {
-                            absSample < 140 -> 0.85f
-                            absSample < 320 -> {
-                                val t = (absSample - 140).toFloat() / 180f
-                                0.85f + t * (scale - 0.85f)
+                            absSample < 170 -> 0.90f
+                            absSample < 380 -> {
+                                val t = (absSample - 170).toFloat() / 210f
+                                0.90f + t * (scale - 0.90f)
                             }
                             else -> scale
                         }
                         var boosted = sample.toFloat() * effectiveScale
-                        if (abs(boosted) > 15500f) {
+                        if (abs(boosted) > 20500f) {
                             val sign = if (boosted >= 0f) 1f else -1f
-                            val ex = abs(boosted) - 15500f
-                            boosted = sign * (15500f + 5000f * (ex / (ex + 5000f)))
+                            val ex = abs(boosted) - 20500f
+                            boosted = sign * (20500f + 6000f * (ex / (ex + 6000f)))
                         }
                         val outShort = boosted.toInt().coerceIn(-32767, 32767).toShort()
                         buf[idx] = (outShort.toInt() and 0xFF).toByte()

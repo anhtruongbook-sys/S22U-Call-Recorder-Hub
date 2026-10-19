@@ -509,6 +509,7 @@ class CallMonitorForegroundService : Service() {
     }
 
     private fun detachCallAudioAnchor() {
+        OTTCallAccessibilityService.instance?.detachAccessibilityAudioAnchor()
         val view = audioAnchorView ?: return
         audioAnchorView = null
         try {
@@ -558,8 +559,8 @@ class CallMonitorForegroundService : Service() {
 
     /**
      * Khi bắt đầu cuộc gọi:
-     * - Nếu đã cấp quyền WRITE_SECURE_SETTINGS: Tự động BẬT cầu nối OTTCallAccessibilityService chỉ trong lúc gọi
-     *   để Android 16 mở khóa 100% âm thanh đàm thoại 2 chiều (.m4a), và tự động TẮT ngay khi cúp máy!
+     * - Nếu đã cấp quyền WRITE_SECURE_SETTINGS: Tự động BẬT cầu nối OTTCallAccessibilityService
+     *   kèm neo 1x1 TYPE_ACCESSIBILITY_OVERLAY để Android 16 mở khóa 100% âm thanh đàm thoại 2 chiều (.m4a).
      */
     fun evaluateAudioHardwareInterrupt() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -581,15 +582,15 @@ class CallMonitorForegroundService : Service() {
             mainHandler.removeCallbacks(callEndRunnable)
             val tag = resolveActiveCallTag(mode)
 
-            // Tự động BẬT cầu nối Trợ năng tức thời chỉ cho cuộc gọi này nếu đã có quyền WRITE_SECURE_SETTINGS
             if (autoRecordOttEnabled &&
                 hasWriteSecureSettings(this) &&
                 !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
             ) {
-                enableEphemeralAccessibilityForCall(this)
+                enableEphemeralAccessibilityForCall(this, force = true)
             }
 
             val accService = OTTCallAccessibilityService.instance
+            accService?.attachAccessibilityAudioAnchor()
             val anyRecordingNow = (accService != null && accService.dspEngine.isRecording) || dspEngine.isRecording
 
             if (!wasInActiveCall || !anyRecordingNow) {
@@ -609,10 +610,7 @@ class CallMonitorForegroundService : Service() {
                     updateNotification("ĐANG GHI ÂM $tag (Định dạng .m4a)...", true)
                 }
             } else {
-                accService?.dspEngine?.updateActiveCallTag(tag)
-                if (dspEngine.isRecording) {
-                    dspEngine.updateActiveCallTag(tag)
-                }
+                dspEngine.updateActiveCallTag(tag)
             }
         } else if (mode != AudioManager.MODE_RINGTONE && wasInActiveCall) {
             mainHandler.removeCallbacks(callEndRunnable)

@@ -57,6 +57,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
         private val RINGING_OR_DIALING_KEYWORDS = listOf(
             "đang đổ chuông",
             "đổ chuông",
+            "đang gọi...",
             "cuộc gọi đến",
             "cuộc gọi thoại đến",
             "cuộc gọi video đến",
@@ -66,7 +67,8 @@ class OTTCallNotificationListener : NotificationListenerService() {
             "incoming voice call",
             "incoming video call",
             "connecting",
-            "dialing"
+            "dialing",
+            "calling"
         )
 
         private val ACTIVE_CONVERSATION_KEYWORDS = listOf(
@@ -219,8 +221,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
                 CallMonitorForegroundService.lastDetectedApp =
                     "Đang đàm thoại: $appName ($title) • Đang ghi âm"
                 if (wasRingingBefore) {
-                    OTTCallAccessibilityService.instance?.dspEngine?.notifyCallConnectedAndTrimPreRing(newTag)
-                    CallMonitorForegroundService.instance?.dspEngine?.notifyCallConnectedAndTrimPreRing(newTag)
+                    CallMonitorForegroundService.getSharedEngine(this).notifyCallConnectedAndTrimPreRing(newTag)
                 }
             } else if (hasRingingKeyword) {
                 isCallRingingOrDialing = true

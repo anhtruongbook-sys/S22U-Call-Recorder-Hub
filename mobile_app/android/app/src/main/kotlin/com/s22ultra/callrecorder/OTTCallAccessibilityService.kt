@@ -3,22 +3,25 @@ package com.s22ultra.callrecorder
 import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
+import android.graphics.PixelFormat
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 
 /**
  * Cầu nối Thu âm 2 Chiều & Lá Chắn Ngân Hàng Tức Thời (`0ms Pre-Launch Banking Stealth + Auto-Restore`):
  * 1. Luôn sẵn sàng ở `0ms` trước khi cuộc gọi Zalo/OTT bắt đầu để `AudioRecord.Builder().setContext(this)`
  *    được hệ điều hành Android 16 cấp quyền thu âm `VOICE_RECOGNITION` 2 chiều rõ nét (.m4a).
- * 2. Ngay khoảnh khắc người dùng chạm vào biểu tượng App Ngân hàng / VNeID trên màn hình chính (`TYPE_VIEW_CLICKED`)
- *    hoặc mở cửa sổ App Ngân hàng (`TYPE_WINDOW_STATE_CHANGED`): lập tức gọi `disableSelf()` trong `0ms`
- *    (trước khi App Ngân hàng kịp khởi tạo tiến trình) để mọi App Ngân hàng mở bình thường 100%.
- * 3. Ngay khi người dùng thoát App Ngân hàng (hoặc khi có cuộc gọi mới), nếu đã cấp `WRITE_SECURE_SETTINGS`,
- *    `CallMonitorForegroundService` tự động BẬT LẠI dịch vụ ngầm mà không cần thao tác tay.
+ * 2. Gắn neo `1x1` vô hình `TYPE_ACCESSIBILITY_OVERLAY` trong suốt thời gian đàm thoại để `AudioPolicyService::UidPolicy::isA11yOnTop()`
+ *    trên Android 16 / One UI 8 luôn đạt `true` 100%, không bao giờ bị tắt tiếng khi 2 người bắt đầu nói chuyện.
+ * 3. Ngay khoảnh khắc người dùng chạm vào biểu tượng App Ngân hàng / VNeID trên Màn hình chính (`TYPE_VIEW_CLICKED` tại Launcher)
+ *    hoặc mở cửa sổ App Ngân hàng (`TYPE_WINDOW_STATE_CHANGED`): lập tức gọi `disableSelf()` trong `0ms`.
  */
 class OTTCallAccessibilityService : AccessibilityService() {
 
@@ -95,6 +98,14 @@ class OTTCallAccessibilityService : AccessibilityService() {
             return enabledServices.contains(expected) || enabledServices.contains(shortName)
         }
 
+        fun isLauncherPackage(pkg: String): Boolean {
+            if (pkg.isBlank()) return false
+            val lower = pkg.lowercase()
+            return lower.contains("launcher") ||
+                    lower.contains("home") ||
+                    lower == "com.sec.android.app.launcher"
+        }
+
         fun isSystemOrSafePackage(pkg: String): Boolean {
             if (pkg.isBlank()) return true
             return pkg.startsWith("com.android.") ||
@@ -129,6 +140,58 @@ class OTTCallAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    @Volatile
+    private var a11yAudioAnchorView: View? = null
+
+    fun attachAccessibilityAudioAnchor() {
+        val action = Runnable {
+            if (a11yAudioAnchorView != null) return@Runnable
+            try {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@Runnable
+                val view = View(this)
+                val params = WindowManager.LayoutParams(
+                    1,
+                    1,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = 0
+                    y = 0
+                }
+                wm.addView(view, params)
+                a11yAudioAnchorView = view
+            } catch (_: Exception) {
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run()
+        } else {
+            mainHandler.post(action)
+        }
+    }
+
+    fun detachAccessibilityAudioAnchor() {
+        val action = Runnable {
+            val view = a11yAudioAnchorView ?: return@Runnable
+            a11yAudioAnchorView = null
+            try {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                wm?.removeView(view)
+            } catch (_: Exception) {
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run()
+        } else {
+            mainHandler.post(action)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -138,10 +201,6 @@ class OTTCallAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
 
-        // Kiểm tra ngay khi vừa kết nối:
-        // - Nếu đang thu âm (do CallMonitorForegroundService mở trước đó vài trăm ms), nâng cấp ngay luồng AudioRecord
-        //   sang Context của OTTCallAccessibilityService ngay trong vòng lặp mà KHÔNG đóng hay xóa file!
-        // - Nếu đang trong cuộc gọi mà chưa thu âm, bắt đầu thu âm ngay lập tức!
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val mode = am?.mode ?: AudioManager.MODE_NORMAL
         val hasVoipStream = try {
@@ -158,13 +217,16 @@ class OTTCallAccessibilityService : AccessibilityService() {
                 hasVoipStream)
 
         if (dspEngine.isRecording) {
+            attachAccessibilityAudioAnchor()
             dspEngine.requestAccessibilityStreamUpgrade()
         } else if (inCallNow) {
+            attachAccessibilityAudioAnchor()
             startCallRecordingFromAccessibilityBridge(mode)
         }
     }
 
     fun startCallRecordingFromAccessibilityBridge(audioMode: Int) {
+        attachAccessibilityAudioAnchor()
         if (dspEngine.isRecording) {
             dspEngine.requestAccessibilityStreamUpgrade()
             return
@@ -183,6 +245,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     fun stopCallRecordingAndKeepReady(): Map<String, Any?>? {
+        detachAccessibilityAudioAnchor()
         return if (dspEngine.isRecording) {
             dspEngine.stopRecording()
         } else {
@@ -194,9 +257,8 @@ class OTTCallAccessibilityService : AccessibilityService() {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
 
-        // TẦNG 1: Bắt ngay khoảnh khắc ngón tay chạm vào Icon App Ngân hàng / VNeID trên Màn hình chính
-        // (Tắt Trợ năng trước 150ms khi App Ngân hàng còn chưa kịp khởi tạo tiến trình!)
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+        // TẦNG 1: Chỉ bắt sự kiện chạm vào Icon App Ngân hàng / VNeID khi đang ở Màn hình chính (Launcher) và KHÔNG trong cuộc gọi
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && !dspEngine.isRecording && isLauncherPackage(pkg)) {
             val clickedText = buildString {
                 event.text?.forEach { append(it).append(" ") }
                 if (event.contentDescription != null) append(event.contentDescription)
@@ -220,6 +282,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     private fun engageInstantBankingStealth(bankingTarget: String) {
+        detachAccessibilityAudioAnchor()
         if (dspEngine.isRecording) {
             dspEngine.stopRecording()
         }
@@ -230,6 +293,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     fun safelyDisableSelfNow() {
+        detachAccessibilityAudioAnchor()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 disableSelf()
@@ -242,6 +306,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        detachAccessibilityAudioAnchor()
         instance = null
         super.onDestroy()
     }
