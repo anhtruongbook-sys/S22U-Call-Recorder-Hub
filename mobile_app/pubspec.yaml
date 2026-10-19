@@ -1,7 +1,7 @@
 name: s22u_call_recorder
 description: Ứng dụng Ghi Âm Cuộc Gọi Toàn Diện (SIM & Zalo, Viber, Telegram, WhatsApp) cho Samsung Galaxy S22 Ultra (Non-Root).
 publish_to: 'none'
-version: 2.9.3+24
+version: 2.9.4+25
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

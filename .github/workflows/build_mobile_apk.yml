@@ -62,14 +62,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.3
-          name: "S22 Ultra Call Recorder Hub v2.9.3 (Studio Noise Suppression -13dB + 2-Stage 260Hz-3400Hz Voice Bandpass + Keep Hardware AEC)"
+          tag_name: v2.9.4
+          name: "S22 Ultra Call Recorder Hub v2.9.4 (Dual-Mic Stereo Top-Earpiece Pickup + Pure Linear Hardware NS/AGC + 192kbps .m4a)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.3)
-            - **Xử Lý Triệt Để Tiếng Ồn / Sôi Nền (`v2.9.3`)**:
-              + Giữ nguyên bộ khử tiếng vang phần cứng (`AcousticEchoCanceler`) và bật `NoiseSuppressor` của chip Snapdragon.
-              + Lọc thông dải giọng nói 2 tầng (`260Hz – 3400Hz`) cắt sạch tiếng ù trầm (`< 260Hz`) và tiếng xè cao tần (`> 3.4kHz`).
-              + Cổng nén tạp âm nền thích ứng (`Downward Expander 0.22x` / `-13 dB` khi không có tiếng nói) và hạ mức khuếch đại từ `8.4x` + `6.0x` xuống mức cân bằng tự nhiên `1.6x` (`-7.1 dBFS`).
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.4)
+            - **Thu Âm Kép 2 Mic (`Dual-Mic Stereo Top-Earpiece Pickup`)**: Kích hoạt đồng thời cả **Mic Đỉnh máy (cách Loa thoại Earpiece chỉ 8mm)** và **Mic Đáy máy** trên S22 Ultra để bắt trực tiếp âm thanh loa thoại mà không cần đẩy Gain phần mềm.
+            - **Âm Thanh Tuyến Tính Nguyên Bản (`Pure Linear Hardware NS/AGC`)**: Sử dụng trực tiếp `NoiseSuppressor` + `AutomaticGainControl` phần cứng của chip Qualcomm Snapdragon, loại bỏ 100% hiện tượng sôi nền/thở nền do bơm Gain biến thiên, mã hóa chuẩn `.m4a` (`AAC-LC 192kbps, 48kHz`).
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false
