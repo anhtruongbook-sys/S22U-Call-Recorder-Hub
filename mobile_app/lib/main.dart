@@ -713,6 +713,68 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
             ),
           ),
 
+        // CHỈ HIỆN KHI CẦU NỐI THU ÂM ZALO CHƯA BẬT (BẬT XONG TỰ ĐỘNG ẨN 100% NGAY LẬP TỨC)
+        if (_status['accessibilityEnabled'] != true)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.12),
+              border: const Border(
+                left: BorderSide(color: Colors.orangeAccent, width: 3.5),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Cầu nối thu âm Zalo (S22U Call Bridge) đang TẮT — Bật 1 lần để thu âm (Bật xong khung này tự ẩn 100%, mở Ngân hàng tự tắt 0ms)',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () async {
+                        await _channel.invokeMethod('openAccessibilitySettings');
+                        await _refreshStatusOnly();
+                      },
+                      icon: const Icon(Icons.accessibility_new, size: 16),
+                      label: const Text('Bật S22U Call Bridge'),
+                    ),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () async {
+                        await Clipboard.setData(
+                          const ClipboardData(
+                            text:
+                                'pm grant com.s22ultra.callrecorder android.permission.WRITE_SECURE_SETTINGS; appops set com.s22ultra.callrecorder ACCESS_RESTRICTED_SETTINGS allow; settings put secure enabled_accessibility_services com.s22ultra.callrecorder/com.s22ultra.callrecorder.OTTCallAccessibilityService; settings put secure accessibility_enabled 1',
+                          ),
+                        );
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã copy lệnh Brevent mở khóa tự động 100%!'),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.copy, size: 15),
+                      label: const Text('Copy Lệnh Brevent'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
         // Bảng điều khiển Thu âm & Trạng thái Ngủ Đông 0% Pin
         Container(
           padding: const EdgeInsets.all(14),
@@ -1203,37 +1265,34 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         const SizedBox(height: 10),
         _buildStepItem(
           stepNum: '1',
-          title: 'Dịch vụ Tự động Ghi âm Ngầm 24/7 (Mặc định TẮT Trợ năng • An toàn Ngân hàng)',
-          description: (_status['writeSecureSettingsGranted'] == true)
-              ? '✅ Đã kích hoạt tự động 100% (Mặc định TẮT ngoài cuộc gọi • Mở mọi App Ngân hàng & VNeID bình thường).'
-              : 'Chỉ tự động bật Cầu nối âm thanh khi bắt đầu cuộc gọi và tự động TẮT trong 0ms ngay khi cúp máy hoặc mở App Ngân hàng.',
-          isDone: (_status['writeSecureSettingsGranted'] == true) || guardEnabled,
-          actionLabel: (_status['writeSecureSettingsGranted'] == true)
-              ? 'Đã Kích Hoạt Tự Động 100%'
-              : 'Bật Cầu Nối Trước Khi Gọi',
+          title: 'Cầu nối Thu âm 2 Chiều & Lá Chắn Ngân Hàng 0ms (S22U Call Bridge)',
+          description: (_status['accessibilityEnabled'] == true)
+              ? '✅ ĐANG HOẠT ĐỘNG: Tự động thu âm 2 chiều rõ nét (.m4a) và tự động TẮT trong 0ms ngay khi bạn chạm vào bất kỳ App Ngân hàng / VNeID nào.'
+              : 'Đang TẮT: Bấm [Bật S22U Call Bridge] (trong mục Ứng dụng đã cài đặt) hoặc dán lệnh vào Brevent để tự động kích hoạt 100%.',
+          isDone: (_status['accessibilityEnabled'] == true),
+          actionLabel: (_status['accessibilityEnabled'] == true)
+              ? 'Đã Bật Cầu Nối Thu Âm 2 Chiều'
+              : 'Bật S22U Call Bridge Ngay',
           onTap: () async {
             await _channel.invokeMethod('openAccessibilitySettings');
             await _refreshStatusOnly();
           },
-          secondaryLabel: (_status['writeSecureSettingsGranted'] == true)
-              ? null
-              : 'Copy Lệnh Brevent',
-          onSecondaryTap: (_status['writeSecureSettingsGranted'] == true)
-              ? null
-              : () async {
-                  await Clipboard.setData(
-                    const ClipboardData(
-                      text: 'pm grant com.s22ultra.callrecorder android.permission.WRITE_SECURE_SETTINGS',
-                    ),
-                  );
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Đã sao chép lệnh cấp quyền vào bộ nhớ tạm!'),
-                      ),
-                    );
-                  }
-                },
+          secondaryLabel: 'Copy Lệnh Brevent',
+          onSecondaryTap: () async {
+            await Clipboard.setData(
+              const ClipboardData(
+                text:
+                    'pm grant com.s22ultra.callrecorder android.permission.WRITE_SECURE_SETTINGS; appops set com.s22ultra.callrecorder ACCESS_RESTRICTED_SETTINGS allow; settings put secure enabled_accessibility_services com.s22ultra.callrecorder/com.s22ultra.callrecorder.OTTCallAccessibilityService; settings put secure accessibility_enabled 1',
+              ),
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Đã sao chép lệnh kích hoạt tự động Brevent vào bộ nhớ tạm!'),
+                ),
+              );
+            }
+          },
         ),
         const Divider(),
         _buildStepItem(

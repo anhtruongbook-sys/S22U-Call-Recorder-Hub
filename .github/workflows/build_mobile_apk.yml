@@ -62,13 +62,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.1
-          name: "S22 Ultra Call Recorder Hub v2.9.1 (Clean Recordings UI + Auto-Hide Activation When Granted + Banking-Safe Ephemeral Bridge)"
+          tag_name: v2.9.2
+          name: "S22 Ultra Call Recorder Hub v2.9.2 (Fix 2-Way Zalo Call Recording + Unified Shared Engine + 0ms Pre-Launch Banking Stealth + Auto-Hide Activation)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.0)
-            - **Kích Hoạt 100% Trực Tiếp Trên Điện Thoại (Không Cần Máy Tính)**: Tích hợp 2 chế độ kích hoạt ngay trên điện thoại (1-Tap Bật trước khi gọi tự tắt 0ms khi cúp máy/mở Ngân hàng, hoặc Gỡ lỗi không dây ngay trên ĐT qua Brevent 1 lần duy nhất).
-            - **Tương Thích 100% Mọi App Ngân Hàng & VNeID**: Mặc định TẮT Trợ năng 100% ngoài cuộc gọi; tự động gọi `disableSelf()` trong `0ms` ngay khi cúp máy hoặc mở bất kỳ App Ngân hàng nào.
-            - **Thu âm 2 chiều rõ nét chuẩn `.m4a` (AAC-LC 128kbps)**: Mở khóa luồng `VOICE_RECOGNITION` trong cuộc gọi Zalo/OTT trên Android 16 One UI 8.
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.2)
+            - **Sửa Triệt Để Lỗi Không Ghi Âm Cuộc Gọi Zalo (`v2.9.2`)**: Loại bỏ bộ đếm tự ngắt sớm 1.5s và hợp nhất 1 Engine thu âm duy nhất (`getSharedEngine`) dùng `AudioRecord.Builder().setContext(accessibilityService)` trên Android 16 One UI 8.
+            - **Tự Động Kiểm Tra & Ẩn 100% Thanh Kích Hoạt Khi Đã Bật**: Kiểm tra trực tiếp trạng thái kết nối thực tế (`instance != null`), tự động nạp lại Cầu nối nếu đã cấp quyền Brevent, và ẩn hoàn toàn 100% thanh nhắc ngay khi Cầu nối hoạt động.
+            - **Lá Chắn Ngân Hàng 0ms + Tự Khôi Phục**: Tự động gọi `disableSelf()` trong `0ms` ngay khi chạm vào biểu tượng App Ngân hàng / VNeID trên màn hình chính và tự bật lại sau khi thoát App Ngân hàng.
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

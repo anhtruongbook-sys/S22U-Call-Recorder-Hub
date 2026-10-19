@@ -11,15 +11,14 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * Cầu nối Thu âm Tức thời Chỉ Trong Cuộc Gọi (`Ephemeral Call-Only Accessibility Bridge`):
- * - Nguyên lý hoạt động:
- *   1. Bình thường (khi KHÔNG có cuộc gọi): Tự động TẮT HOÀN TOÀN (`disableSelf()`), để mọi App Ngân hàng
- *      (VCB, BIDV, VietinBank, Techcombank, MB Bank, VNeID...) hoạt động 100% bình thường mọi lúc.
- *   2. Khi có cuộc gọi Zalo / OTT bắt đầu: `CallMonitorForegroundService` tự động BẬT dịch vụ này lên
- *      (nếu đã cấp `WRITE_SECURE_SETTINGS` 1 lần trên điện thoại) để hệ điều hành Android 16 mở khóa
- *      luồng thu âm `VOICE_RECOGNITION` 2 chiều rõ nét.
- *   3. Ngay khi cúp máy kết thúc cuộc gọi (hoặc ngay khi người dùng mở bất kỳ App Ngân hàng nào):
- *      Lập tức gọi `disableSelf()` để TẮT HOÀN TOÀN về trạng thái `OFF` trong 0ms!
+ * Cầu nối Thu âm 2 Chiều & Lá Chắn Ngân Hàng Tức Thời (`0ms Pre-Launch Banking Stealth + Auto-Restore`):
+ * 1. Luôn sẵn sàng ở `0ms` trước khi cuộc gọi Zalo/OTT bắt đầu để `AudioRecord.Builder().setContext(this)`
+ *    được hệ điều hành Android 16 cấp quyền thu âm `VOICE_RECOGNITION` 2 chiều rõ nét (.m4a).
+ * 2. Ngay khoảnh khắc người dùng chạm vào biểu tượng App Ngân hàng / VNeID trên màn hình chính (`TYPE_VIEW_CLICKED`)
+ *    hoặc mở cửa sổ App Ngân hàng (`TYPE_WINDOW_STATE_CHANGED`): lập tức gọi `disableSelf()` trong `0ms`
+ *    (trước khi App Ngân hàng kịp khởi tạo tiến trình) để mọi App Ngân hàng mở bình thường 100%.
+ * 3. Ngay khi người dùng thoát App Ngân hàng (hoặc khi có cuộc gọi mới), nếu đã cấp `WRITE_SECURE_SETTINGS`,
+ *    `CallMonitorForegroundService` tự động BẬT LẠI dịch vụ ngầm mà không cần thao tác tay.
  */
 class OTTCallAccessibilityService : AccessibilityService() {
 
@@ -40,21 +39,53 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "com.tpb.mb.gprsandroid",
             "com.vnpay.Agribank3g",
             "com.sacombank.ewallet",
+            "src.com.sacombank",
             "com.shb.mbanking",
+            "vn.shb.mbanking",
             "com.vnpay.hdbank",
+            "com.hdbank.ipuma",
             "com.vib.myvib2",
+            "com.vnpay.vib",
             "com.ocb.omniextra",
+            "vn.com.ocb.awe",
             "vn.shinhan.global.vn.bank",
             "com.tpbank.quickpay",
+            "com.seabank.seateacher",
+            "vn.com.seabank.mb1",
+            "com.msb.mbanking",
+            "com.lpbank.lienviet24h",
+            "vn.com.lpb.lienviet24h",
+            "com.vnpay.eximbank",
+            "com.namabank.openbanking",
+            "com.bvbank.digimi",
+            "com.abbank.youbank",
+            "com.pvcombank.PSG",
             "com.mservice.momotransfer",
             "vn.zalopay.sdk",
             "com.bplus.vtpay",
             "com.vnptit.innovation.vnptpay",
+            "com.vnpay.wallet",
             "com.vnid",
-            "vn.gov.eid"
+            "vn.gov.eid",
+            "com.bhtd.etax",
+            "vn.gov.gdt.etaxmobile"
+        )
+
+        val BANKING_KEYWORDS = listOf(
+            "bank", "vcb", "vietcombank", "bidv", "ipay", "vietinbank",
+            "mbmobile", "mbbank", "mb bank", "techcombank", "vpbank",
+            "agribank", "sacombank", "tpbank", "hdbank", "myvib", "vib ",
+            "ocb", "seabank", "lpbank", "lienviet", "shb", "eximbank",
+            "msb", "nam a", "abbank", "pvcombank", "bvbank", "timo",
+            "cake", "tnex", "vnid", "vneid", "smartbanking", "digibank",
+            "mbanking", "ebanking", "ngân hàng", "etax"
         )
 
         fun isAccessibilityServiceEnabled(context: Context): Boolean {
+            return instance != null
+        }
+
+        fun isAccessibilitySettingListed(context: Context): Boolean {
             val enabledServices = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
@@ -63,27 +94,54 @@ class OTTCallAccessibilityService : AccessibilityService() {
             val shortName = "${context.packageName}/.OTTCallAccessibilityService"
             return enabledServices.contains(expected) || enabledServices.contains(shortName)
         }
+
+        fun isSystemOrSafePackage(pkg: String): Boolean {
+            if (pkg.isBlank()) return true
+            return pkg.startsWith("com.android.") ||
+                    pkg.startsWith("com.samsung.") ||
+                    pkg.startsWith("com.sec.") ||
+                    pkg.startsWith("com.google.") ||
+                    pkg == "android" ||
+                    pkg == "com.s22ultra.callrecorder" ||
+                    CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.containsKey(pkg)
+        }
+
+        fun isBankingOrProtectedPackage(pkg: String): Boolean {
+            if (isSystemOrSafePackage(pkg)) return false
+            if (BANKING_AND_GOV_PACKAGES.contains(pkg)) return true
+            val lower = pkg.lowercase()
+            return BANKING_KEYWORDS.any { lower.contains(it) }
+        }
+
+        fun isBankingIconLabelClicked(labelText: String): Boolean {
+            if (labelText.isBlank()) return false
+            val lower = labelText.lowercase().trim()
+            if (lower.contains("s22u") || lower.contains("call recorder") || lower.contains("trợ năng")) {
+                return false
+            }
+            return BANKING_KEYWORDS.any { lower.contains(it) } ||
+                    lower == "mb" || lower == "acb" || lower == "vib" || lower == "shb" || lower == "ocb" || lower == "msb"
+        }
     }
 
-    lateinit var dspEngine: AudioDspRecorderEngine
+    val dspEngine: AudioDspRecorderEngine
+        get() = CallMonitorForegroundService.getSharedEngine(this)
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate() {
         super.onCreate()
         instance = this
-        dspEngine = AudioDspRecorderEngine(applicationContext)
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        if (!::dspEngine.isInitialized) {
-            dspEngine = AudioDspRecorderEngine(applicationContext)
-        }
 
-        // Kiểm tra ngay khi vừa kết nối: Nếu đang có cuộc gọi thì bắt đầu thu âm ngay lập tức!
-        // Ngược lại, nếu đã cấp WRITE_SECURE_SETTINGS (Chế độ Tự Động Tức Thời) và hiện KHÔNG có cuộc gọi,
-        // tự tắt ngay lập tức để trạng thái mặc định luôn là OFF 100%!
+        // Kiểm tra ngay khi vừa kết nối:
+        // - Nếu đang thu âm (do CallMonitorForegroundService mở trước đó vài trăm ms), nâng cấp ngay luồng AudioRecord
+        //   sang Context của OTTCallAccessibilityService ngay trong vòng lặp mà KHÔNG đóng hay xóa file!
+        // - Nếu đang trong cuộc gọi mà chưa thu âm, bắt đầu thu âm ngay lập tức!
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val mode = am?.mode ?: AudioManager.MODE_NORMAL
         val hasVoipStream = try {
@@ -99,33 +157,17 @@ class OTTCallAccessibilityService : AccessibilityService() {
                 mode == AudioManager.MODE_IN_CALL ||
                 hasVoipStream)
 
-        if (inCallNow) {
+        if (dspEngine.isRecording) {
+            dspEngine.requestAccessibilityStreamUpgrade()
+        } else if (inCallNow) {
             startCallRecordingFromAccessibilityBridge(mode)
-        } else if (CallMonitorForegroundService.hasWriteSecureSettings(this)) {
-            // Nếu đã có quyền tự bật/tắt tự động và hiện không có cuộc gọi -> Tắt ngay để luôn sạch sẽ cho App Ngân hàng!
-            mainHandler.postDelayed({
-                val curMode = (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.mode ?: AudioManager.MODE_NORMAL
-                if (curMode != AudioManager.MODE_IN_COMMUNICATION &&
-                    curMode != AudioManager.MODE_IN_CALL &&
-                    !dspEngine.isRecording
-                ) {
-                    safelyDisableSelfNow()
-                }
-            }, 1500L)
         }
     }
 
     fun startCallRecordingFromAccessibilityBridge(audioMode: Int) {
-        if (!::dspEngine.isInitialized) {
-            dspEngine = AudioDspRecorderEngine(applicationContext)
-        }
-        if (dspEngine.isRecording) return
-
-        // Nếu CallMonitorForegroundService đang giữ phiên thu nháp không có quyền Accessibility,
-        // chuyển giao ngay sang dspEngine của AccessibilityService để Android 16 mở khóa 100% âm thanh!
-        val fgEngine = CallMonitorForegroundService.instance?.dspEngine
-        if (fgEngine != null && fgEngine.isRecording) {
-            fgEngine.stopRecording()
+        if (dspEngine.isRecording) {
+            dspEngine.requestAccessibilityStreamUpgrade()
+            return
         }
 
         val tag = CallMonitorForegroundService.instance?.resolveActiveCallTag(audioMode)
@@ -137,50 +179,54 @@ class OTTCallAccessibilityService : AccessibilityService() {
             remoteGainBoost = CallMonitorForegroundService.remoteGainBoost,
             autoBoostEarpieceVolume = CallMonitorForegroundService.autoBoostVolume
         )
-        CallMonitorForegroundService.lastDetectedApp = "$tag (Đang thu âm 2 chiều qua Cầu nối Tức thời .m4a)"
+        CallMonitorForegroundService.lastDetectedApp = "$tag (Đang thu âm 2 chiều .m4a)"
     }
 
-    fun stopCallRecordingAndAutoDisableIfPermitted(): Map<String, Any?>? {
-        val saved = if (::dspEngine.isInitialized && dspEngine.isRecording) {
+    fun stopCallRecordingAndKeepReady(): Map<String, Any?>? {
+        return if (dspEngine.isRecording) {
             dspEngine.stopRecording()
         } else {
             null
         }
-        // Nếu máy đã cấp quyền tự bật/tắt (WRITE_SECURE_SETTINGS), lập tức TẮT Trợ năng ngay khi cúp máy!
-        if (CallMonitorForegroundService.hasWriteSecureSettings(this)) {
-            safelyDisableSelfNow()
-        }
-        return saved
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: return
-            // Bất biến Bảo vệ App Ngân hàng: Dù vì bất kỳ lý do gì người dùng mở App Ngân hàng / VNeID
-            // khi Trợ năng đang bật, lập tức gọi disableSelf() trong 0ms để App Ngân hàng vào thẳng 100%!
+        val pkg = event.packageName?.toString() ?: ""
+
+        // TẦNG 1: Bắt ngay khoảnh khắc ngón tay chạm vào Icon App Ngân hàng / VNeID trên Màn hình chính
+        // (Tắt Trợ năng trước 150ms khi App Ngân hàng còn chưa kịp khởi tạo tiến trình!)
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            val clickedText = buildString {
+                event.text?.forEach { append(it).append(" ") }
+                if (event.contentDescription != null) append(event.contentDescription)
+            }
+            if (isBankingIconLabelClicked(clickedText)) {
+                engageInstantBankingStealth("Icon ${clickedText.trim()}")
+                return
+            }
+        }
+
+        // TẦNG 2: Bắt sự kiện chuyển cửa sổ của bất kỳ App Ngân hàng / VNeID nào
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && pkg.isNotEmpty()) {
             if (isBankingOrProtectedPackage(pkg)) {
-                if (::dspEngine.isInitialized && dspEngine.isRecording) {
-                    dspEngine.stopRecording()
-                }
-                CallMonitorForegroundService.lastDetectedApp =
-                    "Đã tự tắt Trợ năng tức thì khi mở $pkg (An toàn 100% Ngân hàng)"
-                safelyDisableSelfNow()
+                engageInstantBankingStealth(pkg)
+                return
+            }
+            if (CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.containsKey(pkg)) {
+                CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
             }
         }
     }
 
-    private fun isBankingOrProtectedPackage(pkg: String): Boolean {
-        if (BANKING_AND_GOV_PACKAGES.contains(pkg)) return true
-        val lower = pkg.lowercase()
-        return lower.contains("bank") ||
-                lower.contains("vcb") ||
-                lower.contains("bidv") ||
-                lower.contains("ipay") ||
-                lower.contains("vnpay") ||
-                lower.contains("smartbanking") ||
-                lower.contains("vneid") ||
-                lower.contains("eid")
+    private fun engageInstantBankingStealth(bankingTarget: String) {
+        if (dspEngine.isRecording) {
+            dspEngine.stopRecording()
+        }
+        CallMonitorForegroundService.lastDetectedApp =
+            "Đã tự tắt Trợ năng 0ms khi mở $bankingTarget (Sẽ tự bật lại khi thoát)"
+        CallMonitorForegroundService.onBankingStealthEngaged(this)
+        safelyDisableSelfNow()
     }
 
     fun safelyDisableSelfNow() {
@@ -196,9 +242,6 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
-        if (::dspEngine.isInitialized && dspEngine.isRecording) {
-            dspEngine.stopRecording()
-        }
         instance = null
         super.onDestroy()
     }

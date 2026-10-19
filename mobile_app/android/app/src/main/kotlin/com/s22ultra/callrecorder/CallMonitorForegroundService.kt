@@ -129,21 +129,54 @@ class CallMonitorForegroundService : Service() {
             }
         }
 
-        fun enableEphemeralAccessibilityForCall(context: Context): Boolean {
+        @Volatile
+        private var sharedEngineInstance: AudioDspRecorderEngine? = null
+
+        @Synchronized
+        fun getSharedEngine(context: Context): AudioDspRecorderEngine {
+            val existing = sharedEngineInstance
+            if (existing != null) return existing
+            val created = AudioDspRecorderEngine(context.applicationContext)
+            sharedEngineInstance = created
+            return created
+        }
+
+        @Volatile
+        private var lastAutoBindAttemptMs: Long = 0L
+
+        fun enableEphemeralAccessibilityForCall(context: Context, force: Boolean = false): Boolean {
+            if (OTTCallAccessibilityService.instance != null) return true
             if (!hasWriteSecureSettings(context)) return false
+            val now = System.currentTimeMillis()
+            if (!force && (now - lastAutoBindAttemptMs) < 3_500L) {
+                return false
+            }
+            lastAutoBindAttemptMs = now
             return try {
                 val cr = context.contentResolver
                 val cn = ComponentName(context, OTTCallAccessibilityService::class.java).flattenToString()
+                val shortCn = "${context.packageName}/.OTTCallAccessibilityService"
                 val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-                val parts = current.split(":").map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
-                if (!parts.contains(cn)) {
-                    parts.add(cn)
+                val existingParts = current.split(":").map { it.trim() }.filter { it.isNotEmpty() }
+                val cleanParts = existingParts.filter { it != cn && it != shortCn }
+
+                // Nếu trong Settings.Secure đã tồn tại chuỗi cũ nhưng Service chưa bind (instance == null),
+                // phải xóa tạm chuỗi cũ trước rồi ghi lại chuỗi mới để kích hoạt ContentObserver của Android!
+                if (existingParts.size != cleanParts.size) {
                     Settings.Secure.putString(
                         cr,
                         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                        parts.joinToString(":")
+                        cleanParts.joinToString(":")
                     )
                 }
+
+                val updatedParts = cleanParts.toMutableList()
+                updatedParts.add(cn)
+                Settings.Secure.putString(
+                    cr,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                    updatedParts.joinToString(":")
+                )
                 Settings.Secure.putString(cr, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
                 true
             } catch (_: Exception) {
@@ -175,6 +208,11 @@ class CallMonitorForegroundService : Service() {
                 false
             }
         }
+
+        fun onBankingStealthEngaged(context: Context) {
+            disableEphemeralAccessibilityAfterCall(context)
+            instance?.scheduleAutoRestoreAfterBankingExit()
+        }
     }
 
     lateinit var dspEngine: AudioDspRecorderEngine
@@ -184,6 +222,55 @@ class CallMonitorForegroundService : Service() {
     private var wasInActiveCall = false
     private var audioAnchorView: View? = null
     private var callbacksRegistered = false
+
+    private val bankingRestoreRunnable = object : Runnable {
+        override fun run() {
+            if (disableMode == "MANUAL_OFF" || !hasWriteSecureSettings(this@CallMonitorForegroundService)) {
+                return
+            }
+            val fgPkg = queryLatestForegroundPackage(15_000L)
+            if (fgPkg != null && OTTCallAccessibilityService.isBankingOrProtectedPackage(fgPkg)) {
+                // Người dùng vẫn đang ở trong App Ngân hàng -> Đợi thêm 3 giây rồi kiểm tra tiếp
+                mainHandler.postDelayed(this, 3000L)
+            } else {
+                // Người dùng đã thoát App Ngân hàng -> Tự động bật lại Cầu nối thu âm và dừng kiểm tra (0% CPU)
+                enableEphemeralAccessibilityForCall(this@CallMonitorForegroundService)
+                lastDetectedApp = "Đã tự bật lại Cầu nối sau khi thoát App Ngân hàng (0% CPU)"
+            }
+        }
+    }
+
+    fun scheduleAutoRestoreAfterBankingExit() {
+        mainHandler.removeCallbacks(bankingRestoreRunnable)
+        mainHandler.postDelayed(bankingRestoreRunnable, 3500L)
+    }
+
+    private fun queryLatestForegroundPackage(windowMs: Long): String? {
+        if (!hasUsageStatsPermission(this)) return null
+        return try {
+            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
+            val now = System.currentTimeMillis()
+            val events = usm.queryEvents(now - windowMs, now)
+            val event = UsageEvents.Event()
+            var latestPkg: String? = null
+            var latestTime = 0L
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
+                    event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
+                ) {
+                    val pkg = event.packageName ?: ""
+                    if (pkg.isNotEmpty() && event.timeStamp >= latestTime) {
+                        latestTime = event.timeStamp
+                        latestPkg = pkg
+                    }
+                }
+            }
+            latestPkg
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private val callEndRunnable = Runnable {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
@@ -205,21 +292,18 @@ class CallMonitorForegroundService : Service() {
             OTTCallNotificationListener.isCallRingingOrDialing = false
             OTTCallNotificationListener.isCallAnswered = false
 
-            val accSaved = OTTCallAccessibilityService.instance?.stopCallRecordingAndAutoDisableIfPermitted()
-            val fgSaved = if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
+            val saved = if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
                 dspEngine.stopRecording()
             } else {
                 null
             }
-            disableEphemeralAccessibilityAfterCall(this)
             detachCallAudioAnchor()
 
-            val saved = accSaved ?: fgSaved
             val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
             lastDetectedApp =
-                "$savedTag (Đã lưu .m4a • Đã tự TẮT Trợ năng 100%)"
+                "$savedTag (Đã lưu .m4a • Sẵn sàng tự tắt 0ms khi mở Ngân hàng)"
             updateNotification(
-                "Đã lưu $savedTag • Trợ năng ĐÃ TẮT (An toàn Ngân hàng)",
+                "Đã lưu $savedTag (.m4a) • Đang Ngủ Đông (0.0% CPU)",
                 false
             )
         }
@@ -244,9 +328,15 @@ class CallMonitorForegroundService : Service() {
         remoteGainBoost = prefs.getFloat("remoteGainBoost", 2.2f)
         autoBoostVolume = prefs.getBoolean("autoBoostVolume", false)
         disableMode = prefs.getString("disableMode", "NONE") ?: "NONE"
-        dspEngine = AudioDspRecorderEngine(applicationContext)
+        dspEngine = getSharedEngine(applicationContext)
         createNotificationChannel()
         registerZeroBatteryHardwareCallbacks()
+        if (disableMode != "MANUAL_OFF" &&
+            hasWriteSecureSettings(this) &&
+            !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
+        ) {
+            enableEphemeralAccessibilityForCall(this)
+        }
     }
 
     private fun registerZeroBatteryHardwareCallbacks() {

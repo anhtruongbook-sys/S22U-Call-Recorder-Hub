@@ -128,6 +128,15 @@ class AudioDspRecorderEngine(private val context: Context) {
         }
     }
 
+    @Volatile
+    private var upgradeToAccessibilityRequested: Boolean = false
+
+    fun requestAccessibilityStreamUpgrade() {
+        if (isRecording) {
+            upgradeToAccessibilityRequested = true
+        }
+    }
+
     /**
      * Được gọi khi thông báo Zalo chuyển sang trạng thái "Đang gọi thoại" / có đồng hồ đếm giây (đã nhấc máy).
      */
@@ -141,6 +150,7 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
         }
         markCallAnsweredRequested = true
+        upgradeToAccessibilityRequested = true
     }
 
     private fun openCleanAudioRecord(source: Int, sampleRate: Int): AudioRecord? {
@@ -149,8 +159,24 @@ class AudioDspRecorderEngine(private val context: Context) {
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
         if (minBufSize <= 0) return null
         val bufferSize = minBufSize * 6
+        val activeCtx: Context = OTTCallAccessibilityService.instance ?: context
         return try {
-            val candidate = AudioRecord(source, sampleRate, channelConfig, audioFormat, bufferSize)
+            val candidate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                AudioRecord.Builder()
+                    .setContext(activeCtx)
+                    .setAudioSource(source)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(audioFormat)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(channelConfig)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .build()
+            } else {
+                AudioRecord(source, sampleRate, channelConfig, audioFormat, bufferSize)
+            }
             if (candidate.state == AudioRecord.STATE_INITIALIZED) {
                 try {
                     val sessionId = candidate.audioSessionId
@@ -427,11 +453,30 @@ class AudioDspRecorderEngine(private val context: Context) {
                         fos.write(chunkBytes, 0, bytesToWrite)
                         totalAudioBytes += bytesToWrite
 
-                        // Khôi phục tự động nếu hệ điều hành tắt tiếng kênh thu về 0 tuyệt đối (maxRawInBuffer == 0)
-                        // khi Zalo vừa chuyển trạng thái bắt máy (chỉ dùng nguồn sạch, tuyệt đối không dùng UNPROCESSED)
-                        if (maxRawInBuffer == 0) {
+                        // Khôi phục / Nâng cấp tự động luồng thu âm với quyền OTTCallAccessibilityService
+                        // ngay khi Cầu nối vừa kết nối hoặc khi Zalo vừa chuyển trạng thái bắt máy
+                        if (upgradeToAccessibilityRequested) {
+                            upgradeToAccessibilityRequested = false
+                            val upgraded = openCleanAudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate)
+                                ?: openCleanAudioRecord(MediaRecorder.AudioSource.MIC, sampleRate)
+                            if (upgraded != null) {
+                                try {
+                                    activeRecorder.stop()
+                                } catch (_: Exception) {
+                                }
+                                try {
+                                    activeRecorder.release()
+                                } catch (_: Exception) {
+                                }
+                                activeRecorder = upgraded
+                                activeRecorder.startRecording()
+                                prevRaw = 0f
+                                prevHp = 0f
+                                prevLp = 0f
+                            }
+                        } else if (maxRawInBuffer <= 5) {
                             consecutiveExactZeroBuffers++
-                            if (consecutiveExactZeroBuffers >= 22 && recoveryAttempts < 6) {
+                            if (consecutiveExactZeroBuffers >= 18 && recoveryAttempts < 8) {
                                 consecutiveExactZeroBuffers = 0
                                 recoveryAttempts++
                                 currentSourceIdx = (currentSourceIdx + 1) % cleanSources.size

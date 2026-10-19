@@ -40,7 +40,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        fallbackDspEngine = AudioDspRecorderEngine(applicationContext)
+        fallbackDspEngine = CallMonitorForegroundService.getSharedEngine(applicationContext)
         syncManager = SamsungCallSyncManager(applicationContext)
 
         val recPrefs = getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
@@ -66,11 +66,15 @@ class MainActivity : FlutterActivity() {
                         ) {
                             startGuardService()
                         }
+                        val hasWriteSec = CallMonitorForegroundService.hasWriteSecureSettings(this)
+                        if (hasWriteSec &&
+                            CallMonitorForegroundService.disableMode != "MANUAL_OFF" &&
+                            !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
+                        ) {
+                            CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this)
+                        }
                         CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?.takeIf { it.isRecording }
-                            ?: CallMonitorForegroundService.instance?.dspEngine
-                            ?: fallbackDspEngine
+                        val activeEngine = CallMonitorForegroundService.getSharedEngine(applicationContext)
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
                         diag["accessibilityEnabled"] = OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
                         diag["guardServiceRunning"] = CallMonitorForegroundService.isGuardRunning
@@ -79,7 +83,7 @@ class MainActivity : FlutterActivity() {
                         diag["storagePermissionGranted"] = hasStoragePermission()
                         diag["usageStatsGranted"] = CallMonitorForegroundService.hasUsageStatsPermission(this)
                         diag["overlayPermissionGranted"] = CallMonitorForegroundService.hasOverlayPermission(this)
-                        diag["writeSecureSettingsGranted"] = CallMonitorForegroundService.hasWriteSecureSettings(this)
+                        diag["writeSecureSettingsGranted"] = hasWriteSec
                         diag["isRecording"] = activeEngine.isRecording
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
                         diag["currentAppTag"] = activeEngine.currentAppTag
@@ -377,9 +381,7 @@ class MainActivity : FlutterActivity() {
                         }
                         CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this)
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?: CallMonitorForegroundService.instance?.dspEngine
-                            ?: fallbackDspEngine
+                        val activeEngine = CallMonitorForegroundService.getSharedEngine(applicationContext)
                         val path = activeEngine.startRecording(
                             appTag = appTag,
                             remoteGainBoost = CallMonitorForegroundService.remoteGainBoost,
@@ -389,19 +391,13 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "stopRecording" -> {
-                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
-                            ?.takeIf { it.isRecording }
-                            ?: CallMonitorForegroundService.instance?.dspEngine
-                            ?.takeIf { it.isRecording }
-                            ?: fallbackDspEngine
+                        val activeEngine = CallMonitorForegroundService.getSharedEngine(applicationContext)
                         val info = activeEngine.stopRecording()
-                        CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
                         result.success(info)
                     }
 
                     "listRecordings" -> {
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
-                            ?: fallbackDspEngine
+                        val activeEngine = CallMonitorForegroundService.getSharedEngine(applicationContext)
                         Thread {
                             val list = syncManager.getAllUnifiedRecordings(activeEngine)
                             runOnUiThread {
