@@ -622,6 +622,13 @@ class MainActivity : FlutterActivity() {
                     currentlyPlayingPath = null
                 }
                 prepare()
+                try {
+                    loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
+                        setTargetGain(400) // +4.0 dB tăng độ rõ giọng nói trên loa ngoài S22 Ultra
+                        enabled = true
+                    }
+                } catch (_: Exception) {
+                }
                 start()
             }
             currentlyPlayingPath = path

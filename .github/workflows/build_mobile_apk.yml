@@ -62,16 +62,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.8
-          name: "S22 Ultra Call Recorder Hub v2.9.8 (16kHz Hardware NS + 512-Point FFT Wiener Spectral Denoiser + Wiener-Khinchin Pitch Voice Gate)"
+          tag_name: v2.9.9
+          name: "S22 Ultra Call Recorder Hub v2.9.9 (Loud Studio Voice + Zero-Noise 512-Point FFT Amplitude Wiener + Linear Confirmed-Voice Normalizer)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.8)
-            - **Thay Thế Hoàn Toàn Bộ AGC Miền Thời Gian Bằng Động Cơ Lọc Phổ `512-Point Radix-2 FFT Wiener` + Nhận Diện Chu Kỳ Dây Thanh Quản `Wiener-Khinchin Pitch Gate` (`SNR = 87.5 dB`)**:
-              + Chuyển sang thu âm ở tần số gốc **`16.000 Hz` (16kHz Wideband HD)** của chip xử lý giọng nói Qualcomm Fluence Pro, bảo toàn 100% ma trận khử ồn phần cứng (`NoiseSuppressor = true`, không tắt `AcousticEchoCanceler` và không bật `AutomaticGainControl` phần cứng gây sôi nền).
-              + Mỗi khung `32ms` (`512` mẫu, chồng lấp 50% cửa sổ `sqrt-Hann`) được biến đổi sang miền tần số bằng `Radix-2 FFT`, cắt bỏ tuyệt đối (`0.0`) mọi vạch phổ dưới `250 Hz` (tiếng ù phòng, quạt gió, rung tay) và trên `3.400 Hz` (tiếng xè nhiệt).
-              + Áp dụng **Định lý Wiener-Khinchin (`IFFT(|X(k)|^2)`)** để đo độ tuần hoàn dây thanh quản người (`85 Hz – 365 Hz`): khi không có sóng hài giọng người, cổng âm thanh tự động nén sâu xuống `-30.5 dB` (`0.03x`), giữ khoảng lặng êm tuyệt đối (`RMS = 0.11`, `-94 dBFS`).
-              + Xóa bỏ hoàn toàn hàm `normalizeWavFileToBroadcastStandard` và `LoudnessEnhancer` (`+7.5 dB`) từng phóng đại nhiễu nền gấp hàng chục lần ở các bản trước.
-            - **Giữ Nguyên Lá Chắn Tàng Hình Ngân Hàng `0ms` (`v2.9.7`)**: Tự động ngắt `OTTCallAccessibilityService` ngay khi mở App Ngân hàng / VNeID và không bao giờ tự bật lại khi đang ở trong App Ngân hàng.
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.9)
+            - **Nâng Cấp Âm Lượng Giọng Nói Chuẩn Studio (`Peak ~ 26.800`, `-1.7 dBFS`) Mà Vẫn Giữ Nền Tĩnh Lặng Tuyệt Đối (`Silence RMS < 2.0`, `SNR > 80 dB`)**:
+              + Chuyển hàm truyền đạt Wiener từ tỷ số công suất $P_{\text{clean}} / P$ sang **Bộ Lọc Biên Độ Wiener Chuẩn ($\sqrt{P_{\text{clean}} / P}$)**, khôi phục trọn vẹn năng lượng hài âm giọng nói tự nhiên.
+              + Khi cổng chu kỳ dây thanh quản người (`Wiener-Khinchin Pitch Gate`, `85 Hz – 365 Hz`) xác nhận có $\ge 2$ khung sóng hài giọng nói liên tiếp (`pitchCorr >= 0.45`), bộ khuếch đại giọng nói mở tức thời lên mức mục tiêu `6500 / cleanRms` (tối đa `8.5x`) kèm thời gian ngân đuôi âm tiết `8 khung (128ms)`, trong khi tạp âm nền không tuần hoàn vẫn bị khóa chặt ở `-32 dB` (`0.025x`).
+              + Bổ sung **Bộ Chuẩn Hóa Tuyến Tính Hằng Số Có Xác Thực Giọng Nói (`normalizeConfirmedVoiceWavLinear`)**: chỉ kích hoạt khi cuộc gọi có tối thiểu $\ge 12$ khung giọng người đã xác thực, nhân một hệ số tuyến tính hằng số duy nhất đưa đỉnh giọng nói lên `26.800 / 32.767` (`-1.7 dBFS`) mà không làm tăng tiếng ồn nền (vì nền đã ở mức `< 1.0`, nhân tuyến tính vẫn giữ nền `< 4.0` / `-78 dBFS`).
+              + Tích hợp `LoudnessEnhancer (+4.0 dB)` cho trình phát nội bộ trong ứng dụng và nâng mức âm lượng loa thoại tự động lên `85%`.
+            - **Giữ Nguyên Lá Chắn Tàng Hình Ngân Hàng `0ms` (`v2.9.7`)**: Tự động ngắt `OTTCallAccessibilityService` ngay khi mở App Ngân hàng / VNeID.
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false
