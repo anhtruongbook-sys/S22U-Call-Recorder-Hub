@@ -180,12 +180,8 @@ class AudioDspRecorderEngine(private val context: Context) {
             if (candidate.state == AudioRecord.STATE_INITIALIZED) {
                 try {
                     val sessionId = candidate.audioSessionId
-                    if (AcousticEchoCanceler.isAvailable()) {
-                        AcousticEchoCanceler.create(sessionId)?.apply { enabled = false }
-                    }
-                    if (AutomaticGainControl.isAvailable()) {
-                        AutomaticGainControl.create(sessionId)?.apply { enabled = false }
-                    }
+                    // Tuyệt đối KHÔNG tắt AcousticEchoCanceler phần cứng của máy để loa đàm thoại không bị vọng/ồn.
+                    // Bật bộ lọc khử nhiễu phần cứng NoiseSuppressor của chip Snapdragon.
                     if (NoiseSuppressor.isAvailable()) {
                         NoiseSuppressor.create(sessionId)?.apply { enabled = true }
                     }
@@ -204,7 +200,7 @@ class AudioDspRecorderEngine(private val context: Context) {
     @Synchronized
     fun startRecording(
         appTag: String,
-        remoteGainBoost: Float = 2.2f,
+        remoteGainBoost: Float = 1.5f,
         autoBoostEarpieceVolume: Boolean = false
     ): String? {
         if (isRecording) return currentFilePath
@@ -336,22 +332,26 @@ class AudioDspRecorderEngine(private val context: Context) {
         var recoveryAttempts = 0
 
         val normalizedSlider = userGainSetting.coerceIn(1.0f, 4.0f)
-        // Khuếch đại mượt mà giọng loa thoại từ ngưỡng envelope >= 14f lên tới 8.5x
-        val maxRemoteBoost = 4.0f + normalizedSlider * 2.0f
+        // Khuếch đại vừa phải, trong trẻo cho dải giọng nói (từ 1.6x đến tối đa 2.8x thay vì 8.4x gây sôi nền)
+        val maxRemoteBoost = 1.35f + (normalizedSlider - 1.0f) * 0.48f
 
-        // Bộ lọc High-Pass (~110Hz) & Low-Pass (~7500Hz) nguyên bản của v2.0.0 (đã kiểm chứng không gây nhiễu)
+        // Bộ lọc thông dải Giọng Nói (Voice-Band 260Hz – 3400Hz):
+        // - High-Pass 260Hz (hpAlpha = 0.966f ở 48kHz) triệt tiêu tiếng ù nền phòng, quạt gió, rung tay cầm máy
+        // - Low-Pass 2 tầng nối tiếp 3400Hz (lpAlpha = 0.34f) cắt sạch tiếng xè/sôi tần số cao (> 3.5kHz)
         var prevRaw = 0f
         var prevHp = 0f
-        val hpAlpha = 0.985f
+        val hpAlpha = if (sampleRate >= 44100) 0.966f else 0.905f
 
-        var prevLp = 0f
-        val lpAlpha = 0.62f
+        var prevLp1 = 0f
+        var prevLp2 = 0f
+        val lpAlpha = if (sampleRate >= 44100) 0.34f else 0.62f
 
         var envelope = 0f
-        var smoothedGain = 1.2f
+        var noiseFloor = 180f
+        var smoothedGain = 0.65f
 
-        val attackCoeff = 0.016f
-        val releaseCoeff = 0.00045f
+        val attackCoeff = 0.012f
+        val releaseCoeff = 0.0008f
 
         try {
             FileOutputStream(outFile).use { fos ->
@@ -382,52 +382,66 @@ class AudioDspRecorderEngine(private val context: Context) {
 
                             val x = rawShort.toFloat()
 
-                            // Bước 1: Lọc bỏ DC Offset & Nhiễu ù tần số thấp (< 110Hz)
+                            // Bước 1: Lọc bỏ DC Offset & Nhiễu ù tần số thấp (< 260Hz)
                             val hp = hpAlpha * (prevHp + x - prevRaw)
                             prevRaw = x
                             prevHp = hp
 
-                            // Bước 2: Lọc mượt gai nhiễu tần số cao (> 7.5kHz)
-                            val cleanSample = prevLp + lpAlpha * (hp - prevLp)
-                            prevLp = cleanSample
+                            // Bước 2: Lọc thông thấp 2 tầng liên tiếp (> 3.4kHz) triệt tiêu tiếng xè/sôi cao tần
+                            prevLp1 += lpAlpha * (hp - prevLp1)
+                            prevLp2 += lpAlpha * (prevLp1 - prevLp2)
+                            val cleanSample = prevLp2
 
                             val absIn = abs(cleanSample)
 
-                            // Bước 3: Theo dõi đường bao năng lượng âm thanh (Envelope Follower)
+                            // Bước 3: Theo dõi đường bao năng lượng âm thanh (Envelope) & Nền ồn phòng (Adaptive Noise Floor)
                             envelope = if (absIn > envelope) {
                                 envelope + attackCoeff * (absIn - envelope)
                             } else {
                                 envelope + releaseCoeff * (absIn - envelope)
                             }
 
-                            // Bước 4: Tính toán Gain mượt mà bắt trọn tiếng loa thoại nhỏ (envelope >= 14f):
-                            // - Nền tĩnh tuyệt đối (envelope < 14): giữ gain = 1.0f (không khuếch đại nhiễu nền)
-                            // - Tiếng loa thoại người bên kia & giọng nói vừa (14..3200): nâng mượt lên maxRemoteBoost (~8.5x)
-                            // - Giọng nói lớn trực tiếp (> 3200): nén mượt về 1.5f chống vỡ tiếng
-                            val desiredGain: Float = when {
-                                envelope < 14f -> 1.0f
-                                envelope < 2800f -> {
-                                    val t = ((envelope - 14f) / 140f).coerceIn(0f, 1f)
-                                    1.0f + t * (maxRemoteBoost - 1.0f)
-                                }
-                                envelope < 7500f -> {
-                                    val t = ((envelope - 2800f) / 4700f).coerceIn(0f, 1f)
-                                    maxRemoteBoost - t * (maxRemoteBoost - 1.5f)
-                                }
-                                else -> 1.5f
+                            if (absIn < noiseFloor * 1.8f) {
+                                noiseFloor = (noiseFloor + 0.00015f * (absIn - noiseFloor)).coerceIn(85f, 460f)
+                            } else {
+                                noiseFloor = (noiseFloor + 0.00001f * (absIn - noiseFloor)).coerceIn(85f, 460f)
                             }
 
-                            val gainStep = if (desiredGain < smoothedGain) 0.02f else 0.0015f
+                            val gateThreshold = (noiseFloor * 1.65f).coerceIn(220f, 680f)
+
+                            // Bước 4: Cổng Chống Ồn Thích Ứng (Downward Expander) + Cân Bằng Giọng Nói 2 Chiều:
+                            // - Khi im lặng / chỉ có tiếng ồn phòng (envelope < noiseFloor): ép gain xuống 0.22f (-13 dB) để nền êm ru
+                            // - Vùng chuyển tiếp (noiseFloor .. gateThreshold): mở mượt từ 0.22f lên 0.85f (không khuếch đại nhiễu)
+                            // - Tiếng loa thoại người bên kia (gateThreshold .. 2600): nâng mượt lên maxRemoteBoost (~1.6x - 2.2x)
+                            // - Giọng mình nói trực tiếp vào Mic (> 2600): giảm mượt về 0.88f để không bị to/chói tai
+                            val desiredGain: Float = when {
+                                envelope < noiseFloor -> 0.22f
+                                envelope < gateThreshold -> {
+                                    val t = ((envelope - noiseFloor) / (gateThreshold - noiseFloor).coerceAtLeast(40f)).coerceIn(0f, 1f)
+                                    0.22f + t * (0.85f - 0.22f)
+                                }
+                                envelope < 2600f -> {
+                                    val t = ((envelope - gateThreshold) / 750f).coerceIn(0f, 1f)
+                                    0.85f + t * (maxRemoteBoost - 0.85f)
+                                }
+                                envelope < 6800f -> {
+                                    val t = ((envelope - 2600f) / 4200f).coerceIn(0f, 1f)
+                                    maxRemoteBoost - t * (maxRemoteBoost - 0.88f)
+                                }
+                                else -> 0.88f
+                            }
+
+                            val gainStep = if (desiredGain < smoothedGain) 0.015f else 0.0012f
                             smoothedGain += gainStep * (desiredGain - smoothedGain)
 
                             var outVal = cleanSample * smoothedGain
 
-                            // Bước 5: Bộ giới hạn mềm liên tục (Continuous Soft-Knee Limiter) ở ngưỡng 24000
+                            // Bước 5: Bộ giới hạn êm (Soft-Knee Ceiling) ở ngưỡng 15000 (-6.8 dBFS) chống chói tai
                             val absOut = abs(outVal)
-                            if (absOut > 24000f) {
+                            if (absOut > 15000f) {
                                 val signVal = if (outVal >= 0f) 1f else -1f
-                                val excess = absOut - 24000f
-                                val softCompressed = 24000f + 8000f * (excess / (excess + 8000f))
+                                val excess = absOut - 15000f
+                                val softCompressed = 15000f + 5500f * (excess / (excess + 5500f))
                                 outVal = signVal * softCompressed
                             }
 
@@ -472,7 +486,8 @@ class AudioDspRecorderEngine(private val context: Context) {
                                 activeRecorder.startRecording()
                                 prevRaw = 0f
                                 prevHp = 0f
-                                prevLp = 0f
+                                prevLp1 = 0f
+                                prevLp2 = 0f
                             }
                         } else if (maxRawInBuffer <= 5) {
                             consecutiveExactZeroBuffers++
@@ -494,7 +509,8 @@ class AudioDspRecorderEngine(private val context: Context) {
                                     activeRecorder.startRecording()
                                     prevRaw = 0f
                                     prevHp = 0f
-                                    prevLp = 0f
+                                    prevLp1 = 0f
+                                    prevLp2 = 0f
                                 }
                             }
                         } else {
@@ -544,8 +560,8 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
                 }
 
-                // Chuẩn hóa đỉnh sóng thêm tối đa 6.0x lên mức 25.500 (-2.1 dBFS) cho mọi cuộc gọi có tiếng nói (peak >= 35)
-                if (overallPeakRecorded in 35..23500) {
+                // Chuẩn hóa nhẹ nhàng đỉnh sóng lên mức êm ái 14.500 (-7.1 dBFS, tối đa 1.85x) và KHÔNG khuếch đại nền tĩnh
+                if (overallPeakRecorded in 450..12500) {
                     normalizeWavFileToBroadcastStandard(outFile, overallPeakRecorded)
                 }
 
@@ -817,9 +833,9 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
                 }
 
-                if (peak < 35 || peak >= 23500) return false
+                if (peak < 450 || peak >= 12500) return false
 
-                val scale = (25500f / peak.toFloat()).coerceIn(1.1f, 6.0f)
+                val scale = (14500f / peak.toFloat()).coerceIn(1.05f, 1.85f)
                 var readPos = 44L
                 var remaining = dataLen
 
@@ -834,11 +850,21 @@ class AudioDspRecorderEngine(private val context: Context) {
                         val lo = buf[idx].toInt() and 0xFF
                         val hi = buf[idx + 1].toInt()
                         val sample = ((hi shl 8) or lo).toShort().toInt()
-                        var boosted = sample.toFloat() * scale
-                        if (abs(boosted) > 24500f) {
+                        val absSample = abs(sample)
+                        // Không bao giờ khuếch đại nền tĩnh / tạp âm nhỏ (< 220) khi chuẩn hóa
+                        val effectiveScale = when {
+                            absSample < 140 -> 0.85f
+                            absSample < 320 -> {
+                                val t = (absSample - 140).toFloat() / 180f
+                                0.85f + t * (scale - 0.85f)
+                            }
+                            else -> scale
+                        }
+                        var boosted = sample.toFloat() * effectiveScale
+                        if (abs(boosted) > 15500f) {
                             val sign = if (boosted >= 0f) 1f else -1f
-                            val ex = abs(boosted) - 24500f
-                            boosted = sign * (24500f + 6500f * (ex / (ex + 6500f)))
+                            val ex = abs(boosted) - 15500f
+                            boosted = sign * (15500f + 5000f * (ex / (ex + 5000f)))
                         }
                         val outShort = boosted.toInt().coerceIn(-32767, 32767).toShort()
                         buf[idx] = (outShort.toInt() and 0xFF).toByte()

@@ -62,13 +62,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.2
-          name: "S22 Ultra Call Recorder Hub v2.9.2 (Fix 2-Way Zalo Call Recording + Unified Shared Engine + 0ms Pre-Launch Banking Stealth + Auto-Hide Activation)"
+          tag_name: v2.9.3
+          name: "S22 Ultra Call Recorder Hub v2.9.3 (Studio Noise Suppression -13dB + 2-Stage 260Hz-3400Hz Voice Bandpass + Keep Hardware AEC)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.2)
-            - **Sửa Triệt Để Lỗi Không Ghi Âm Cuộc Gọi Zalo (`v2.9.2`)**: Loại bỏ bộ đếm tự ngắt sớm 1.5s và hợp nhất 1 Engine thu âm duy nhất (`getSharedEngine`) dùng `AudioRecord.Builder().setContext(accessibilityService)` trên Android 16 One UI 8.
-            - **Tự Động Kiểm Tra & Ẩn 100% Thanh Kích Hoạt Khi Đã Bật**: Kiểm tra trực tiếp trạng thái kết nối thực tế (`instance != null`), tự động nạp lại Cầu nối nếu đã cấp quyền Brevent, và ẩn hoàn toàn 100% thanh nhắc ngay khi Cầu nối hoạt động.
-            - **Lá Chắn Ngân Hàng 0ms + Tự Khôi Phục**: Tự động gọi `disableSelf()` trong `0ms` ngay khi chạm vào biểu tượng App Ngân hàng / VNeID trên màn hình chính và tự bật lại sau khi thoát App Ngân hàng.
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.3)
+            - **Xử Lý Triệt Để Tiếng Ồn / Sôi Nền (`v2.9.3`)**:
+              + Giữ nguyên bộ khử tiếng vang phần cứng (`AcousticEchoCanceler`) và bật `NoiseSuppressor` của chip Snapdragon.
+              + Lọc thông dải giọng nói 2 tầng (`260Hz – 3400Hz`) cắt sạch tiếng ù trầm (`< 260Hz`) và tiếng xè cao tần (`> 3.4kHz`).
+              + Cổng nén tạp âm nền thích ứng (`Downward Expander 0.22x` / `-13 dB` khi không có tiếng nói) và hạ mức khuếch đại từ `8.4x` + `6.0x` xuống mức cân bằng tự nhiên `1.6x` (`-7.1 dBFS`).
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

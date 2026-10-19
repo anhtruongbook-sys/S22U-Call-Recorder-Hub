@@ -58,7 +58,7 @@ class CallMonitorForegroundService : Service() {
         var autoRecordOttEnabled: Boolean = true
 
         @Volatile
-        var remoteGainBoost: Float = 2.2f
+        var remoteGainBoost: Float = 1.5f
 
         @Volatile
         var autoBoostVolume: Boolean = false
@@ -324,8 +324,15 @@ class CallMonitorForegroundService : Service() {
         super.onCreate()
         instance = this
         val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("dsp_v293_clean_migrated", false)) {
+            prefs.edit()
+                .putFloat("remoteGainBoost", 1.5f)
+                .putBoolean("autoBoostVolume", false)
+                .putBoolean("dsp_v293_clean_migrated", true)
+                .apply()
+        }
         autoRecordOttEnabled = prefs.getBoolean("autoRecordOttEnabled", true)
-        remoteGainBoost = prefs.getFloat("remoteGainBoost", 2.2f)
+        remoteGainBoost = prefs.getFloat("remoteGainBoost", 1.5f)
         autoBoostVolume = prefs.getBoolean("autoBoostVolume", false)
         disableMode = prefs.getString("disableMode", "NONE") ?: "NONE"
         dspEngine = getSharedEngine(applicationContext)

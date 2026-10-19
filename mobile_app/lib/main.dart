@@ -1021,13 +1021,13 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     required List<String> installedOtt,
   }) {
     final cs = Theme.of(context).colorScheme;
-    final actualBoostMultiplier = (2.0 + gainBoost * 1.45).toStringAsFixed(1);
+    final actualBoostMultiplier = (1.35 + (gainBoost - 1.0) * 0.48).toStringAsFixed(1);
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
         const Text(
-          'Động Cơ Ghi Âm Lọc Ồn Giọng Nói (260Hz–3600Hz • 0% Pin Khi Chờ)',
+          'Động Cơ Lọc Ồn Giọng Nói 2 Tầng (260Hz–3400Hz • Êm Dịu Không Sôi Nền)',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
         ),
         const SizedBox(height: 6),
@@ -1038,8 +1038,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
             border: const Border(left: BorderSide(color: Colors.greenAccent, width: 3.5)),
           ),
           child: const Text(
-            '• LOA NGHE GỌI TRONG TRẺO 100%: Không can thiệp vào bộ khử tiếng vang phần cứng của máy, trễ 800ms để Zalo/SIM khóa xong bộ lọc ồn loa thoại trước khi thu âm.\n'
-            '• CỔNG CHỐNG ỒN THÍCH ỨNG (Adaptive Noise-Floor Gate): Tự động cắt bỏ tiếng ồn phòng (< 260Hz & > 3600Hz), chỉ khuếch đại khi có tiếng người nói thực sự.',
+            '• GIỮ NGUYÊN BỘ KHỬ TIẾNG VANG PHẦN CỨNG SNAPDRAGON: Tuyệt đối không tắt AcousticEchoCanceler phần cứng của máy, kết hợp NoiseSuppressor giúp cuộc gọi và bản thu êm ru.\n'
+            '• BỘ NÉN TẠP ÂM NỀN (Downward Expander -13 dB): Tự động hạ âm lượng nền tĩnh xuống 0.22x khi không có người nói và cắt sạch tạp âm ngoài dải giọng nói (< 260Hz & > 3400Hz).',
             style: TextStyle(fontSize: 12.5, height: 1.45),
           ),
         ),
@@ -1070,12 +1070,12 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
           children: [
             const Expanded(
               child: Text(
-                'Độ khuếch đại Dải giọng nói (Adaptive Voice-Band Gain)',
+                'Độ nâng giọng nói đầu dây bên kia (Voice-Band Gain)',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
               ),
             ),
             Text(
-              '${actualBoostMultiplier}x (Chống ồn nền)',
+              '${actualBoostMultiplier}x (Lọc ồn -13dB)',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 color: cs.primary,
@@ -1086,8 +1086,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         ),
         const SizedBox(height: 4),
         Text(
-          'Khi không có người nói (ồn nền < 500): Giữ mức 0.85x (êm ru không sôi nền).\n'
-          'Khi có giọng nói (260Hz–3600Hz): Khuếch đại mượt lên ${actualBoostMultiplier}x.',
+          'Khi không có người nói: Tự động nén tạp âm nền xuống 0.22x (-13 dB, êm ru không sôi).\n'
+          'Khi có giọng nói (260Hz–3400Hz): Nâng giọng bên kia lên ${actualBoostMultiplier}x và giữ giọng bạn ở mức êm 0.88x.',
           style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
         ),
         Slider(
