@@ -219,6 +219,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
                 CallMonitorForegroundService.lastDetectedApp =
                     "Đang đàm thoại: $appName ($title) • Đang ghi âm"
                 if (wasRingingBefore) {
+                    OTTCallAccessibilityService.instance?.dspEngine?.notifyCallConnectedAndTrimPreRing(newTag)
                     CallMonitorForegroundService.instance?.dspEngine?.notifyCallConnectedAndTrimPreRing(newTag)
                 }
             } else if (hasRingingKeyword) {

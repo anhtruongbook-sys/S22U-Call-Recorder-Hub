@@ -62,14 +62,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.8.1
-          name: "S22 Ultra Call Recorder Hub v2.8.1 (Fix White Splash Screen Deadlock + Non-Blocking .m4a Encoder + Instant Call Detection)"
+          tag_name: v2.9.0
+          name: "S22 Ultra Call Recorder Hub v2.9.0 (100% On-Phone Activation Without PC + Ephemeral Call-Only Audio Bridge + Auto Banking Shield)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root)
-            - **100% Không dùng Trợ năng (Zero AccessibilityService)**: Xóa bỏ vĩnh viễn thành phần Trợ năng khỏi APK, mở mọi ứng dụng Ngân hàng (VCB, BIDV, VietinBank, Techcombank, MB Bank, VNeID) bình thường 100%.
-            - **Thu âm 2 chiều rõ nét (0ms Direct Hardware Capture + Answer Pre-Roll Gate)**: Khởi tạo kênh `VOICE_RECOGNITION` ngay tức khắc ở `0ms` trước khi Zalo khóa Mic (như bản `v2.0.0`), lọc bỏ hoàn toàn đoạn chờ đổ chuông chưa nhấc máy và khuếch đại tiếng nói sạch không sôi nhiễu.
-            - **Tên file Tiếng Việt Chuẩn Unicode NFC**: Giữ nguyên đầy đủ dấu Tiếng Việt (`Zalo_Trương_Thành_Long_...wav`) và tự động sửa lại các file bị lỗi dấu trước đó.
-            - **Tải tệp APK**: Tải file `S22U_CallRecorder.apk` bên dưới về điện thoại Samsung S22 Ultra và nhấn Cài đặt.
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.0)
+            - **Kích Hoạt 100% Trực Tiếp Trên Điện Thoại (Không Cần Máy Tính)**: Tích hợp 2 chế độ kích hoạt ngay trên điện thoại (1-Tap Bật trước khi gọi tự tắt 0ms khi cúp máy/mở Ngân hàng, hoặc Gỡ lỗi không dây ngay trên ĐT qua Brevent 1 lần duy nhất).
+            - **Tương Thích 100% Mọi App Ngân Hàng & VNeID**: Mặc định TẮT Trợ năng 100% ngoài cuộc gọi; tự động gọi `disableSelf()` trong `0ms` ngay khi cúp máy hoặc mở bất kỳ App Ngân hàng nào.
+            - **Thu âm 2 chiều rõ nét chuẩn `.m4a` (AAC-LC 128kbps)**: Mở khóa luồng `VOICE_RECOGNITION` trong cuộc gọi Zalo/OTT trên Android 16 One UI 8.
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

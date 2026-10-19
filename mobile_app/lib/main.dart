@@ -680,12 +680,15 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final playingPath = (_status['currentlyPlayingPath'] ?? '').toString();
     final cs = Theme.of(context).colorScheme;
 
+    final writeSecureGranted = _status['writeSecureSettingsGranted'] == true;
+    final accEnabled = _status['accessibilityEnabled'] == true;
+
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
-        if (!guardEnabled || !micGranted)
+        if (!micGranted)
           Container(
-            margin: const EdgeInsets.only(bottom: 14),
+            margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
             decoration: BoxDecoration(
               color: Colors.amber.withOpacity(0.10),
@@ -697,43 +700,120 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Dịch vụ Ghi Âm Ngầm đang Tắt hoặc thiếu quyền Mic',
+                  'Cần cấp quyền Microphone & Lưu trữ',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  !micGranted
-                      ? '• Chưa cấp quyền Microphone & Lưu trữ.'
-                      : '• Nhấn nút bên dưới để kích hoạt lại dịch vụ ngầm (Không dùng Trợ năng - Tương thích 100% App Ngân hàng).',
-                  style: const TextStyle(fontSize: 12.5, height: 1.4),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    if (!micGranted)
-                      FilledButton.tonalIcon(
-                        onPressed: () async {
-                          await _channel.invokeMethod('requestPermissions');
-                          await _refreshAll();
-                        },
-                        icon: const Icon(Icons.mic, size: 16),
-                        label: const Text('Cấp quyền Mic'),
-                      ),
-                    if (!guardEnabled)
-                      FilledButton.icon(
-                        onPressed: () async {
-                          await _channel.invokeMethod('openAccessibilitySettings');
-                          await _refreshStatusOnly();
-                        },
-                        icon: const Icon(Icons.bolt, size: 16),
-                        label: const Text('Bật Lại Tự Động Ghi Âm'),
-                      ),
-                  ],
+                const SizedBox(height: 6),
+                FilledButton.tonalIcon(
+                  onPressed: () async {
+                    await _channel.invokeMethod('requestPermissions');
+                    await _refreshAll();
+                  },
+                  icon: const Icon(Icons.mic, size: 16),
+                  label: const Text('Cấp quyền Mic & Bộ nhớ'),
                 ),
               ],
             ),
           ),
+
+        // KHỐI KÍCH HOẠT TRỰC TIẾP TRÊN ĐIỆN THOẠI (KHÔNG CẦN MÁY TÍNH)
+        Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+          decoration: BoxDecoration(
+            color: writeSecureGranted
+                ? Colors.green.withOpacity(0.10)
+                : Colors.blue.withOpacity(0.10),
+            border: Border(
+              left: BorderSide(
+                color: writeSecureGranted ? Colors.greenAccent : Colors.lightBlueAccent,
+                width: 3.5,
+              ),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                writeSecureGranted
+                    ? '✅ ĐÃ KÍCH HOẠT TỰ ĐỘNG 100% (Mặc định TẮT Trợ năng • Dùng mọi App Ngân hàng)'
+                    : '📱 KÍCH HOẠT TRỰC TIẾP TRÊN ĐIỆN THOẠI (KHÔNG CẦN MÁY TÍNH)',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                writeSecureGranted
+                    ? '• Trạng thái Cầu nối hiện tại: ${accEnabled ? "ĐANG BẬT TRONG CUỘC GỌI" : "ĐANG TẮT 100% (An toàn tuyệt đối cho VCB, BIDV, Techcombank, MB, VNeID)"}.'
+                    : '• CÁCH 1 (1 Chạm dùng ngay - Không cài thêm gì): Nhấn "Bật Cầu Nối Trước Khi Gọi" bên dưới. Ngay khi cúp máy hoặc mở bất kỳ App Ngân hàng nào, App sẽ TỰ ĐỘNG TẮT Trợ năng 100% trong 0ms!\n'
+                      '• CÁCH 2 (Tự động bật/tắt ngầm vĩnh viễn ngay trên ĐT qua Gỡ lỗi không dây): Sao chép lệnh -> Mở Brevent + Gỡ lỗi không dây chạy 1 lần (30 giây). Xong có thể gỡ Brevent ngay!',
+                style: const TextStyle(fontSize: 12.2, height: 1.42),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  FilledButton.icon(
+                    onPressed: () async {
+                      await _channel.invokeMethod('openAccessibilitySettings');
+                      await _refreshStatusOnly();
+                    },
+                    icon: const Icon(Icons.bolt, size: 16),
+                    label: Text(
+                      accEnabled
+                          ? 'Đang Bật Cầu Nối (Tự Tắt Khi Cúp Máy)'
+                          : 'Cách 1: Bật Cầu Nối Trước Khi Gọi (Tự Tắt Khi Xong)',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  if (accEnabled)
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await _channel.invokeMethod('disableAccessibilityNow');
+                        await _refreshStatusOnly();
+                      },
+                      icon: const Icon(Icons.power_settings_new, size: 15),
+                      label: const Text('Tắt Ngay Lập Tức', style: TextStyle(fontSize: 12)),
+                    ),
+                  if (!writeSecureGranted) ...[
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        await Clipboard.setData(
+                          const ClipboardData(
+                            text: 'pm grant com.s22ultra.callrecorder android.permission.WRITE_SECURE_SETTINGS',
+                          ),
+                        );
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã sao chép lệnh cấp quyền vào bộ nhớ tạm!'),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.copy, size: 15),
+                      label: const Text('1. Copy Lệnh Tự Động', style: TextStyle(fontSize: 12)),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await _channel.invokeMethod('openBreventApp');
+                      },
+                      icon: const Icon(Icons.terminal, size: 15),
+                      label: const Text('2. Mở Brevent (CH Play)', style: TextStyle(fontSize: 12)),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await _channel.invokeMethod('openDeveloperSettings');
+                      },
+                      icon: const Icon(Icons.wifi_tethering, size: 15),
+                      label: const Text('3. Mở Gỡ Lỗi Không Dây', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
 
         // Bảng điều khiển Thu âm & Trạng thái Ngủ Đông 0% Pin
         Container(

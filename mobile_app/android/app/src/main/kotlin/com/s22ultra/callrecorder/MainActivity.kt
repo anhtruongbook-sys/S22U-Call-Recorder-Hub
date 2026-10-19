@@ -67,17 +67,19 @@ class MainActivity : FlutterActivity() {
                             startGuardService()
                         }
                         CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?.takeIf { it.isRecording }
+                            ?: CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
-                        diag["accessibilityEnabled"] = CallMonitorForegroundService.isGuardRunning
+                        diag["accessibilityEnabled"] = OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
                         diag["guardServiceRunning"] = CallMonitorForegroundService.isGuardRunning
                         diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
                         diag["micPermissionGranted"] = hasMicPermission()
                         diag["storagePermissionGranted"] = hasStoragePermission()
                         diag["usageStatsGranted"] = CallMonitorForegroundService.hasUsageStatsPermission(this)
                         diag["overlayPermissionGranted"] = CallMonitorForegroundService.hasOverlayPermission(this)
-                        diag["writeSecureSettingsGranted"] = true
+                        diag["writeSecureSettingsGranted"] = CallMonitorForegroundService.hasWriteSecureSettings(this)
                         diag["isRecording"] = activeEngine.isRecording
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
                         diag["currentAppTag"] = activeEngine.currentAppTag
@@ -86,7 +88,9 @@ class MainActivity : FlutterActivity() {
                         diag["disableMode"] = CallMonitorForegroundService.disableMode
                         diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
                         diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
-                        diag["lastDetectedApp"] = CallMonitorForegroundService.lastDetectedApp
+                        diag["lastDetectedApp"] = OTTCallAccessibilityService.lastDetectedApp
+                            .takeIf { it.isNotEmpty() && it != "Chưa có cuộc gọi" }
+                            ?: CallMonitorForegroundService.lastDetectedApp
                         diag["currentlyPlayingPath"] = currentlyPlayingPath ?: ""
                         diag["security"] = getSecurityConfigMap()
                         result.success(diag)
@@ -186,15 +190,56 @@ class MainActivity : FlutterActivity() {
                             getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
                                 .edit().putString("disableMode", "NONE").apply()
                             startGuardService()
-                            if (!OTTCallNotificationListener.isNotificationListenerEnabled(this)) {
-                                val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                startActivity(intent)
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
+                            startActivity(intent)
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("ERR_GUARD", e.message, null)
+                        }
+                    }
+
+                    "openDeveloperSettings" -> {
+                        try {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (_: Exception) {
+                            try {
+                                val fallback = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(fallback)
+                                result.success(true)
+                            } catch (e2: Exception) {
+                                result.error("ERR_DEV", e2.message, null)
+                            }
+                        }
+                    }
+
+                    "openBreventApp" -> {
+                        val pkg = call.argument<String>("package") ?: "me.piebridge.brevent"
+                        try {
+                            val launch = packageManager.getLaunchIntentForPackage(pkg)
+                            if (launch != null) {
+                                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(launch)
+                            } else {
+                                val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg")).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(market)
+                            }
+                            result.success(true)
+                        } catch (_: Exception) {
+                            val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg")).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(web)
+                            result.success(true)
                         }
                     }
 
@@ -211,10 +256,7 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "disableAccessibilityNow" -> {
-                        CallMonitorForegroundService.disableMode = "NONE"
-                        getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
-                            .edit().putString("disableMode", "NONE").apply()
-                        startGuardService()
+                        CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
                         result.success(true)
                     }
 
@@ -222,6 +264,7 @@ class MainActivity : FlutterActivity() {
                         CallMonitorForegroundService.disableMode = "MANUAL_OFF"
                         getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
                             .edit().putString("disableMode", "MANUAL_OFF").apply()
+                        CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
                         try {
                             val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
                                 action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
@@ -334,8 +377,10 @@ class MainActivity : FlutterActivity() {
                         if (!CallMonitorForegroundService.isGuardRunning) {
                             startGuardService()
                         }
+                        CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this)
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?: CallMonitorForegroundService.instance?.dspEngine
                             ?: fallbackDspEngine
                         val path = activeEngine.startRecording(
                             appTag = appTag,
@@ -346,9 +391,13 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "stopRecording" -> {
-                        val activeEngine = CallMonitorForegroundService.instance?.dspEngine
+                        val activeEngine = OTTCallAccessibilityService.instance?.dspEngine
+                            ?.takeIf { it.isRecording }
+                            ?: CallMonitorForegroundService.instance?.dspEngine
+                            ?.takeIf { it.isRecording }
                             ?: fallbackDspEngine
                         val info = activeEngine.stopRecording()
+                        CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
                         result.success(info)
                     }
 

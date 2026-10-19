@@ -110,6 +110,62 @@ class CallMonitorForegroundService : Service() {
                 false
             }
         }
+
+        fun hasWriteSecureSettings(context: Context): Boolean {
+            return try {
+                context.checkCallingOrSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        fun enableEphemeralAccessibilityForCall(context: Context): Boolean {
+            if (!hasWriteSecureSettings(context)) return false
+            return try {
+                val cr = context.contentResolver
+                val cn = ComponentName(context, OTTCallAccessibilityService::class.java).flattenToString()
+                val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                val parts = current.split(":").map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+                if (!parts.contains(cn)) {
+                    parts.add(cn)
+                    Settings.Secure.putString(
+                        cr,
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                        parts.joinToString(":")
+                    )
+                }
+                Settings.Secure.putString(cr, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        fun disableEphemeralAccessibilityAfterCall(context: Context): Boolean {
+            OTTCallAccessibilityService.instance?.safelyDisableSelfNow()
+            if (!hasWriteSecureSettings(context)) return false
+            return try {
+                val cr = context.contentResolver
+                val cn = ComponentName(context, OTTCallAccessibilityService::class.java).flattenToString()
+                val shortCn = "${context.packageName}/.OTTCallAccessibilityService"
+                val current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                val remaining = current.split(":")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && it != cn && it != shortCn }
+                Settings.Secure.putString(
+                    cr,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                    remaining.joinToString(":")
+                )
+                if (remaining.isEmpty()) {
+                    Settings.Secure.putString(cr, Settings.Secure.ACCESSIBILITY_ENABLED, "0")
+                }
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     lateinit var dspEngine: AudioDspRecorderEngine
@@ -123,24 +179,40 @@ class CallMonitorForegroundService : Service() {
     private val callEndRunnable = Runnable {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
         val mode = am.mode
-        val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_IN_CALL)
+        val hasVoipStream = try {
+            am.activeRecordingConfigurations.any { cfg ->
+                val src = cfg.clientAudioSource
+                src == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION ||
+                        src == android.media.MediaRecorder.AudioSource.VOICE_CALL
+            }
+        } catch (_: Exception) {
+            false
+        }
+        val isStillCall = (mode == AudioManager.MODE_IN_COMMUNICATION ||
+                mode == AudioManager.MODE_IN_CALL ||
+                hasVoipStream)
         if (!isStillCall && wasInActiveCall) {
             wasInActiveCall = false
             OTTCallNotificationListener.isCallRingingOrDialing = false
             OTTCallNotificationListener.isCallAnswered = false
-            if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
-                val saved = dspEngine.stopRecording()
-                detachCallAudioAnchor()
-                val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
-                lastDetectedApp =
-                    "$savedTag (Đã lưu • Đang Ngủ Đông 0.0% CPU)"
-                updateNotification(
-                    "Đã lưu $savedTag • Đang Ngủ Đông (0.0% CPU)",
-                    false
-                )
+
+            val accSaved = OTTCallAccessibilityService.instance?.stopCallRecordingAndAutoDisableIfPermitted()
+            val fgSaved = if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
+                dspEngine.stopRecording()
             } else {
-                detachCallAudioAnchor()
+                null
             }
+            disableEphemeralAccessibilityAfterCall(this)
+            detachCallAudioAnchor()
+
+            val saved = accSaved ?: fgSaved
+            val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
+            lastDetectedApp =
+                "$savedTag (Đã lưu .m4a • Đã tự TẮT Trợ năng 100%)"
+            updateNotification(
+                "Đã lưu $savedTag • Trợ năng ĐÃ TẮT (An toàn Ngân hàng)",
+                false
+            )
         }
     }
 
@@ -340,7 +412,7 @@ class CallMonitorForegroundService : Service() {
         }
     }
 
-    private fun resolveActiveCallTag(audioMode: Int): String {
+    fun resolveActiveCallTag(audioMode: Int): String {
         val notifTag = OTTCallNotificationListener.currentActiveOttTag
         if (!notifTag.isNullOrBlank()) {
             return notifTag
@@ -379,8 +451,9 @@ class CallMonitorForegroundService : Service() {
     }
 
     /**
-     * Khởi mở ngay tức khắc ở 0ms (giống hệt v2.0.0) để giữ quyền thu VOICE_RECOGNITION trước khi Zalo khóa Mic,
-     * đồng thời cập nhật tên người gọi Tiếng Việt (`updateActiveCallTag`) khi thông báo Zalo gửi tới.
+     * Khi bắt đầu cuộc gọi:
+     * - Nếu đã cấp quyền WRITE_SECURE_SETTINGS: Tự động BẬT cầu nối OTTCallAccessibilityService chỉ trong lúc gọi
+     *   để Android 16 mở khóa 100% âm thanh đàm thoại 2 chiều (.m4a), và tự động TẮT ngay khi cúp máy!
      */
     fun evaluateAudioHardwareInterrupt() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -401,20 +474,39 @@ class CallMonitorForegroundService : Service() {
         if (isCall) {
             mainHandler.removeCallbacks(callEndRunnable)
             val tag = resolveActiveCallTag(mode)
-            if (!wasInActiveCall || !dspEngine.isRecording) {
+
+            // Tự động BẬT cầu nối Trợ năng tức thời chỉ cho cuộc gọi này nếu đã có quyền WRITE_SECURE_SETTINGS
+            if (autoRecordOttEnabled &&
+                hasWriteSecureSettings(this) &&
+                !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
+            ) {
+                enableEphemeralAccessibilityForCall(this)
+            }
+
+            val accService = OTTCallAccessibilityService.instance
+            val anyRecordingNow = (accService != null && accService.dspEngine.isRecording) || dspEngine.isRecording
+
+            if (!wasInActiveCall || !anyRecordingNow) {
                 wasInActiveCall = true
-                if (autoRecordOttEnabled && !dspEngine.isRecording) {
+                if (autoRecordOttEnabled && !anyRecordingNow) {
                     attachCallAudioAnchorIfPermitted()
+                    if (accService != null) {
+                        accService.startCallRecordingFromAccessibilityBridge(mode)
+                    } else {
+                        dspEngine.startRecording(
+                            appTag = tag,
+                            remoteGainBoost = remoteGainBoost,
+                            autoBoostEarpieceVolume = autoBoostVolume
+                        )
+                    }
                     lastDetectedApp = "$tag (Đang ghi âm tự động .m4a)"
-                    dspEngine.startRecording(
-                        appTag = tag,
-                        remoteGainBoost = remoteGainBoost,
-                        autoBoostEarpieceVolume = autoBoostVolume
-                    )
                     updateNotification("ĐANG GHI ÂM $tag (Định dạng .m4a)...", true)
                 }
-            } else if (dspEngine.isRecording) {
-                dspEngine.updateActiveCallTag(tag)
+            } else {
+                accService?.dspEngine?.updateActiveCallTag(tag)
+                if (dspEngine.isRecording) {
+                    dspEngine.updateActiveCallTag(tag)
+                }
             }
         } else if (mode != AudioManager.MODE_RINGTONE && wasInActiveCall) {
             mainHandler.removeCallbacks(callEndRunnable)
