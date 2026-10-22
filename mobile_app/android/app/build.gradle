@@ -59,6 +59,18 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            storeFile file("anhsteam-release.p12")
+            storePassword "anhsteam2026"
+            keyAlias "anhsteam_key"
+            keyPassword "anhsteam2026"
+            storeType "PKCS12"
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
     buildTypes {
         release {
             signingConfig signingConfigs.release
