@@ -27,6 +27,10 @@ class OTTCallNotificationListener : NotificationListenerService() {
 
     companion object {
         @Volatile
+        var instance: OTTCallNotificationListener? = null
+            private set
+
+        @Volatile
         var isConnected: Boolean = false
             private set
 
@@ -120,18 +124,39 @@ class OTTCallNotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        instance = this
         isConnected = true
-        registerHardwareWakeupInterrupts()
-        ensureForegroundGuardRunning()
+        if (CallMonitorForegroundService.isMasterAppEnabled(this)) {
+            registerHardwareWakeupInterrupts()
+            ensureForegroundGuardRunning()
+        } else {
+            unregisterHardwareWakeupInterrupts()
+        }
     }
 
     override fun onListenerDisconnected() {
         isConnected = false
+        if (instance === this) {
+            instance = null
+        }
         unregisterHardwareWakeupInterrupts()
         super.onListenerDisconnected()
     }
 
+    fun onMasterPowerChanged(enabled: Boolean) {
+        if (enabled) {
+            registerHardwareWakeupInterrupts()
+        } else {
+            unregisterHardwareWakeupInterrupts()
+            currentActiveOttTag = null
+            currentCallerTitle = ""
+            isCallRingingOrDialing = false
+            isCallAnswered = false
+        }
+    }
+
     private fun registerHardwareWakeupInterrupts() {
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) return
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && modeListener == null) {
@@ -161,8 +186,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
     }
 
     private fun onHardwareAudioInterrupt() {
-        val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
-        if (prefs.getString("disableMode", "NONE") == "MANUAL_OFF") return
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) return
 
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val mode = am.mode
@@ -175,6 +199,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) return
         if (sbn == null) return
         val pkg = sbn.packageName ?: return
         val appName = OTT_PACKAGES[pkg] ?: return
@@ -241,6 +266,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) return
         if (sbn == null) return
         val pkg = sbn.packageName ?: return
         if (OTT_PACKAGES.containsKey(pkg)) {
@@ -255,9 +281,7 @@ class OTTCallNotificationListener : NotificationListenerService() {
     }
 
     private fun ensureForegroundGuardRunning() {
-        val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
-        if (prefs.getString("disableMode", "NONE") == "MANUAL_OFF") return
-        if (CallMonitorForegroundService.disableMode == "MANUAL_OFF") return
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) return
         if (!CallMonitorForegroundService.isGuardRunning) {
             try {
                 val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {

@@ -14,9 +14,7 @@ import android.os.Build
 class CallBootBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
         if (context == null || intent == null) return
-        val prefs = context.getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
-        val disableMode = prefs.getString("disableMode", "NONE") ?: "NONE"
-        if (disableMode == "MANUAL_OFF") return
+        if (!CallMonitorForegroundService.isMasterAppEnabled(context)) return
 
         try {
             val svcIntent = Intent(context, CallMonitorForegroundService::class.java).apply {

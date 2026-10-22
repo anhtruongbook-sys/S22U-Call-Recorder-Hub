@@ -41,8 +41,13 @@ class CallMonitorForegroundService : Service() {
         private const val ALERT_CHANNEL_ID = "s22u_bridge_restore_alert"
         private const val NOTIF_ID = 2201
         private const val ALERT_NOTIF_ID = 2202
+        const val PREFS_NAME = "s22u_recorder_prefs"
+        const val KEY_MASTER_ENABLED = "masterAppEnabled"
+        const val KEY_DISABLE_MODE = "disableMode"
+        const val KEY_AUTO_RECORD_OTT = "autoRecordOttEnabled"
 
         const val ACTION_START_GUARD = "com.s22ultra.callrecorder.ACTION_START_GUARD"
+        const val ACTION_USER_ENABLE_APP = "com.s22ultra.callrecorder.ACTION_USER_ENABLE_APP"
         const val ACTION_STOP_GUARD_MANUAL = "com.s22ultra.callrecorder.ACTION_STOP_GUARD_MANUAL"
         const val ACTION_TRIGGER_CALL_CHECK = "com.s22ultra.callrecorder.ACTION_TRIGGER_CALL_CHECK"
         const val ACTION_QUICK_RECORD = "com.s22ultra.callrecorder.ACTION_QUICK_RECORD"
@@ -70,6 +75,87 @@ class CallMonitorForegroundService : Service() {
 
         @Volatile
         var lastDetectedApp: String = "Ngủ đông chờ sự kiện (0.0% CPU • Không dùng Trợ năng)"
+
+        /**
+         * Kiểm tra trạng thái BẬT/TẮT tổng của ứng dụng từ SharedPreferences:
+         * - Khi người dùng đã bấm TẮT: trả về `false` 100%, không bất kỳ dịch vụ ngầm, BroadcastReceiver,
+         *   NotificationListener hay MainActivity nào được phép tự bật lại ứng dụng!
+         * - Chỉ khi người dùng chủ động bấm nút BẬT mới trả về `true`.
+         */
+        fun isMasterAppEnabled(context: Context): Boolean {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val master = prefs.getBoolean(KEY_MASTER_ENABLED, true)
+            val mode = prefs.getString(KEY_DISABLE_MODE, "NONE") ?: "NONE"
+            val autoOtt = prefs.getBoolean(KEY_AUTO_RECORD_OTT, true)
+            return master && mode != "MANUAL_OFF" && autoOtt
+        }
+
+        private fun setBootReceiverEnabled(context: Context, enabled: Boolean) {
+            try {
+                val cn = ComponentName(context, CallBootBroadcastReceiver::class.java)
+                val newState = if (enabled) {
+                    android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                } else {
+                    android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                }
+                context.packageManager.setComponentEnabledSetting(
+                    cn,
+                    newState,
+                    android.content.pm.PackageManager.DONT_KILL_APP
+                )
+            } catch (_: Exception) {
+            }
+        }
+
+        /**
+         * Cưỡng bức BẬT hoặc TẮT hoàn toàn ứng dụng (Đồng bộ `.commit()` tức thời xuống bộ nhớ).
+         * Khi `enabled = false`: Ngắt toàn bộ dịch vụ chạy ngầm, tắt Trợ năng, hủy thông báo, khóa BroadcastReceiver
+         * và tuyệt đối không tự bật lại cho đến khi người dùng bấm BẬT (`enabled = true`).
+         */
+        fun setMasterAppPowerState(context: Context, enabled: Boolean) {
+            val appCtx = context.applicationContext
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (enabled) {
+                disableMode = "NONE"
+                autoRecordOttEnabled = true
+                prefs.edit()
+                    .putBoolean(KEY_MASTER_ENABLED, true)
+                    .putString(KEY_DISABLE_MODE, "NONE")
+                    .putBoolean(KEY_AUTO_RECORD_OTT, true)
+                    .commit()
+                setBootReceiverEnabled(appCtx, true)
+                OTTCallNotificationListener.instance?.onMasterPowerChanged(true)
+            } else {
+                disableMode = "MANUAL_OFF"
+                autoRecordOttEnabled = false
+                prefs.edit()
+                    .putBoolean(KEY_MASTER_ENABLED, false)
+                    .putString(KEY_DISABLE_MODE, "MANUAL_OFF")
+                    .putBoolean(KEY_AUTO_RECORD_OTT, false)
+                    .commit()
+                setBootReceiverEnabled(appCtx, false)
+                dismissBridgeAlertNotification(appCtx)
+                disableEphemeralAccessibilityAfterCall(appCtx)
+                OTTCallNotificationListener.instance?.onMasterPowerChanged(false)
+                lastDetectedApp = "Ứng dụng ĐÃ TẮT HOÀN TOÀN (Không tự bật lại trừ khi bấm BẬT)"
+                sharedEngineInstance?.let { engine ->
+                    if (engine.isRecording) {
+                        engine.stopRecording()
+                    }
+                }
+                instance?.shutdownServiceImmediately()
+                try {
+                    appCtx.stopService(Intent(appCtx, CallMonitorForegroundService::class.java))
+                } catch (_: Exception) {
+                }
+                try {
+                    val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                    nm?.cancel(NOTIF_ID)
+                    nm?.cancel(ALERT_NOTIF_ID)
+                } catch (_: Exception) {
+                }
+            }
+        }
 
         val SUPPORTED_OTT_PACKAGES = mapOf(
             "com.zing.zalo" to "Zalo",
@@ -147,6 +233,7 @@ class CallMonitorForegroundService : Service() {
         private var lastAutoBindAttemptMs: Long = 0L
 
         fun enableEphemeralAccessibilityForCall(context: Context, force: Boolean = false): Boolean {
+            if (!isMasterAppEnabled(context)) return false
             if (OTTCallAccessibilityService.instance != null) return true
             if (!hasWriteSecureSettings(context)) return false
             val now = System.currentTimeMillis()
@@ -213,8 +300,9 @@ class CallMonitorForegroundService : Service() {
 
         fun onBankingStealthEngaged(context: Context) {
             disableEphemeralAccessibilityAfterCall(context)
+            if (!isMasterAppEnabled(context)) return
             instance?.onBankingStealthTriggeredInternal()
-            if (!hasWriteSecureSettings(context) && disableMode != "MANUAL_OFF") {
+            if (!hasWriteSecureSettings(context)) {
                 showBridgeDisabledAlertNotification(
                     context,
                     "Cầu nối S22U Call Bridge vừa tạm tắt để bạn dùng App Ngân hàng. Dùng xong Ngân hàng, hãy chạm vào đây để BẬT LẠI GHI ÂM!"
@@ -278,7 +366,7 @@ class CallMonitorForegroundService : Service() {
 
     private val bankingRestoreRunnable = object : Runnable {
         override fun run() {
-            if (disableMode == "MANUAL_OFF" || !hasWriteSecureSettings(this@CallMonitorForegroundService)) {
+            if (!isMasterAppEnabled(this@CallMonitorForegroundService) || !hasWriteSecureSettings(this@CallMonitorForegroundService)) {
                 return
             }
             if (!hasUsageStatsPermission(this@CallMonitorForegroundService)) {
@@ -390,7 +478,7 @@ class CallMonitorForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        val prefs = getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (!prefs.getBoolean("dsp_v293_clean_migrated", false)) {
             prefs.edit()
                 .putFloat("remoteGainBoost", 1.5f)
@@ -398,23 +486,49 @@ class CallMonitorForegroundService : Service() {
                 .putBoolean("dsp_v293_clean_migrated", true)
                 .apply()
         }
-        autoRecordOttEnabled = prefs.getBoolean("autoRecordOttEnabled", true)
+        val masterOn = isMasterAppEnabled(this)
+        autoRecordOttEnabled = if (masterOn) prefs.getBoolean(KEY_AUTO_RECORD_OTT, true) else false
         remoteGainBoost = prefs.getFloat("remoteGainBoost", 1.5f)
         autoBoostVolume = prefs.getBoolean("autoBoostVolume", false)
-        disableMode = prefs.getString("disableMode", "NONE") ?: "NONE"
+        disableMode = if (masterOn) (prefs.getString(KEY_DISABLE_MODE, "NONE") ?: "NONE") else "MANUAL_OFF"
         dspEngine = getSharedEngine(applicationContext)
         createNotificationChannel()
-        registerZeroBatteryHardwareCallbacks()
-        if (disableMode != "MANUAL_OFF" &&
-            hasWriteSecureSettings(this) &&
-            !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
-        ) {
-            enableEphemeralAccessibilityForCall(this)
+        if (masterOn) {
+            registerZeroBatteryHardwareCallbacks()
+            if (hasWriteSecureSettings(this) &&
+                !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
+            ) {
+                enableEphemeralAccessibilityForCall(this)
+            }
+        }
+    }
+
+    fun shutdownServiceImmediately() {
+        unregisterZeroBatteryHardwareCallbacks()
+        mainHandler.removeCallbacksAndMessages(null)
+        detachCallAudioAnchor()
+        if (::dspEngine.isInitialized && dspEngine.isRecording) {
+            dspEngine.stopRecording()
+        }
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {
+        }
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(NOTIF_ID)
+            nm?.cancel(ALERT_NOTIF_ID)
+        } catch (_: Exception) {
+        }
+        isGuardRunning = false
+        try {
+            stopSelf()
+        } catch (_: Exception) {
         }
     }
 
     private fun registerZeroBatteryHardwareCallbacks() {
-        if (callbacksRegistered) return
+        if (callbacksRegistered || !isMasterAppEnabled(this)) return
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -449,24 +563,18 @@ class CallMonitorForegroundService : Service() {
         val action = intent?.action
 
         if (action == ACTION_STOP_GUARD_MANUAL) {
-            disableMode = "MANUAL_OFF"
-            autoRecordOttEnabled = false
-            getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
-                .edit()
-                .putString("disableMode", "MANUAL_OFF")
-                .putBoolean("autoRecordOttEnabled", false)
-                .apply()
-            dismissBridgeAlertNotification(this)
-            disableEphemeralAccessibilityAfterCall(this)
-            lastDetectedApp = "Đã TẮT chức năng ghi âm cuộc gọi (0% Pin)"
-            if (dspEngine.isRecording) {
-                dspEngine.stopRecording()
-            }
-            detachCallAudioAnchor()
-            unregisterZeroBatteryHardwareCallbacks()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            isGuardRunning = false
+            setMasterAppPowerState(this, false)
+            return START_NOT_STICKY
+        }
+
+        // DUY NHẤT khi người dùng chủ động bấm nút BẬT ỨNG DỤNG (ACTION_USER_ENABLE_APP) mới được mở khóa trạng thái TẮT!
+        if (action == ACTION_USER_ENABLE_APP) {
+            setMasterAppPowerState(this, true)
+        }
+
+        // BẤT BIẾN: Khi ứng dụng đang ở trạng thái ĐÃ TẮT, tuyệt đối KHÔNG tự bật lại dưới bất kỳ sự kiện ngầm hay Intent nào!
+        if (!isMasterAppEnabled(this)) {
+            shutdownServiceImmediately()
             return START_NOT_STICKY
         }
 
@@ -490,7 +598,6 @@ class CallMonitorForegroundService : Service() {
                     startForeground(NOTIF_ID, notif)
                 }
                 isGuardRunning = true
-                disableMode = "NONE"
                 lastDetectedApp =
                     "Đang BẬT Tự Động Ghi Âm • Ngủ đông chờ cuộc gọi (0.0% CPU)"
                 registerZeroBatteryHardwareCallbacks()
@@ -499,14 +606,7 @@ class CallMonitorForegroundService : Service() {
         }
 
         when (action) {
-            ACTION_START_GUARD -> {
-                disableMode = "NONE"
-                autoRecordOttEnabled = true
-                getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
-                    .edit()
-                    .putString("disableMode", "NONE")
-                    .putBoolean("autoRecordOttEnabled", true)
-                    .apply()
+            ACTION_USER_ENABLE_APP, ACTION_START_GUARD -> {
                 if (hasWriteSecureSettings(this) && !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
                     enableEphemeralAccessibilityForCall(this, force = true)
                 }
@@ -645,6 +745,9 @@ class CallMonitorForegroundService : Service() {
      *   kèm neo 1x1 TYPE_ACCESSIBILITY_OVERLAY để Android 16 mở khóa 100% âm thanh đàm thoại 2 chiều (.m4a).
      */
     fun evaluateAudioHardwareInterrupt() {
+        if (!isMasterAppEnabled(this) || !autoRecordOttEnabled) {
+            return
+        }
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val mode = am.mode
         val hasVoipRecordingStream = try {
@@ -786,7 +889,7 @@ class CallMonitorForegroundService : Service() {
                 offIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            builder.addAction(android.R.drawable.ic_lock_power_off, "Tắt Ghi Âm", pendingOff)
+            builder.addAction(android.R.drawable.ic_lock_power_off, "Tắt Ứng Dụng", pendingOff)
         }
 
         return builder.build()
@@ -796,12 +899,13 @@ class CallMonitorForegroundService : Service() {
         contentText: String,
         recordingNow: Boolean
     ) {
+        if (!isMasterAppEnabled(this)) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         nm?.notify(NOTIF_ID, buildNotification(contentText, recordingNow))
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (disableMode != "MANUAL_OFF") {
+        if (isMasterAppEnabled(this)) {
             try {
                 val restartIntent = Intent(applicationContext, CallMonitorForegroundService::class.java).apply {
                     action = ACTION_TRIGGER_CALL_CHECK

@@ -44,38 +44,39 @@ class MainActivity : FlutterActivity() {
         syncManager = SamsungCallSyncManager(applicationContext)
 
         val recPrefs = getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
-        CallMonitorForegroundService.autoRecordOttEnabled = recPrefs.getBoolean("autoRecordOttEnabled", true)
+        val masterEnabledOnInit = CallMonitorForegroundService.isMasterAppEnabled(this)
+        CallMonitorForegroundService.autoRecordOttEnabled =
+            if (masterEnabledOnInit) recPrefs.getBoolean("autoRecordOttEnabled", true) else false
         CallMonitorForegroundService.remoteGainBoost = recPrefs.getFloat("remoteGainBoost", 2.2f)
         CallMonitorForegroundService.autoBoostVolume = recPrefs.getBoolean("autoBoostVolume", false)
-        CallMonitorForegroundService.disableMode = recPrefs.getString("disableMode", "NONE") ?: "NONE"
+        CallMonitorForegroundService.disableMode =
+            if (masterEnabledOnInit) (recPrefs.getString("disableMode", "NONE") ?: "NONE") else "MANUAL_OFF"
 
-        if (hasMicPermission() &&
-            !CallMonitorForegroundService.isGuardRunning &&
-            CallMonitorForegroundService.disableMode != "MANUAL_OFF"
+        if (masterEnabledOnInit &&
+            hasMicPermission() &&
+            !CallMonitorForegroundService.isGuardRunning
         ) {
-            startGuardService()
+            startGuardService(userExplicitEnable = false)
         }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getSystemStatus" -> {
-                        if (hasMicPermission() &&
-                            !CallMonitorForegroundService.isGuardRunning &&
-                            CallMonitorForegroundService.disableMode != "MANUAL_OFF"
-                        ) {
-                            startGuardService()
-                        }
+                        val masterEnabled = CallMonitorForegroundService.isMasterAppEnabled(this)
                         val hasWriteSec = CallMonitorForegroundService.hasWriteSecureSettings(this)
-                        if (hasWriteSec &&
-                            CallMonitorForegroundService.disableMode != "MANUAL_OFF" &&
-                            !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
-                        ) {
-                            CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this)
+                        if (masterEnabled) {
+                            if (hasMicPermission() && !CallMonitorForegroundService.isGuardRunning) {
+                                startGuardService(userExplicitEnable = false)
+                            }
+                            if (hasWriteSec && !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                                CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this)
+                            }
+                            CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
                         }
-                        CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
                         val activeEngine = CallMonitorForegroundService.getSharedEngine(applicationContext)
                         val diag = syncManager.getDeviceDiagnostics().toMutableMap()
+                        diag["masterAppEnabled"] = masterEnabled
                         diag["accessibilityEnabled"] = OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
                         diag["guardServiceRunning"] = CallMonitorForegroundService.isGuardRunning
                         diag["notificationListenerGranted"] = OTTCallNotificationListener.isNotificationListenerEnabled(this)
@@ -88,8 +89,8 @@ class MainActivity : FlutterActivity() {
                         diag["currentRecordingPath"] = activeEngine.currentFilePath ?: ""
                         diag["currentAppTag"] = activeEngine.currentAppTag
                         diag["peakAmplitude"] = activeEngine.currentPeakAmplitude
-                        diag["autoRecordOttEnabled"] = CallMonitorForegroundService.autoRecordOttEnabled
-                        diag["disableMode"] = CallMonitorForegroundService.disableMode
+                        diag["autoRecordOttEnabled"] = masterEnabled && CallMonitorForegroundService.autoRecordOttEnabled
+                        diag["disableMode"] = if (masterEnabled) CallMonitorForegroundService.disableMode else "MANUAL_OFF"
                         diag["remoteGainBoost"] = CallMonitorForegroundService.remoteGainBoost.toDouble()
                         diag["autoBoostVolume"] = CallMonitorForegroundService.autoBoostVolume
                         diag["lastDetectedApp"] = CallMonitorForegroundService.lastDetectedApp
@@ -188,10 +189,9 @@ class MainActivity : FlutterActivity() {
 
                     "openAccessibilitySettings" -> {
                         try {
-                            CallMonitorForegroundService.disableMode = "NONE"
-                            getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
-                                .edit().putString("disableMode", "NONE").apply()
-                            startGuardService()
+                            if (CallMonitorForegroundService.isMasterAppEnabled(this)) {
+                                startGuardService(userExplicitEnable = false)
+                            }
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
@@ -265,17 +265,13 @@ class MainActivity : FlutterActivity() {
                     "setMasterRecordingEnabled" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: true
                         val openSettingsIfNeeded = call.argument<Boolean>("openSettingsIfNeeded") ?: false
+                        val closeApp = call.argument<Boolean>("closeApp") ?: false
                         if (enabled) {
                             if (!hasMicPermission()) {
                                 requestRuntimePermissions()
                             }
-                            CallMonitorForegroundService.disableMode = "NONE"
-                            CallMonitorForegroundService.autoRecordOttEnabled = true
-                            getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
-                                .putString("disableMode", "NONE")
-                                .putBoolean("autoRecordOttEnabled", true)
-                                .apply()
-                            startGuardService()
+                            CallMonitorForegroundService.setMasterAppPowerState(this, true)
+                            startGuardService(userExplicitEnable = true)
                             val hasWriteSec = CallMonitorForegroundService.hasWriteSecureSettings(this)
                             if (hasWriteSec && !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
                                 CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this, force = true)
@@ -291,52 +287,39 @@ class MainActivity : FlutterActivity() {
                             result.success(
                                 mapOf(
                                     "enabled" to true,
+                                    "masterAppEnabled" to true,
                                     "accessibilityEnabled" to OTTCallAccessibilityService.isAccessibilityServiceEnabled(this),
                                     "writeSecureSettingsGranted" to hasWriteSec
                                 )
                             )
                         } else {
-                            CallMonitorForegroundService.disableMode = "MANUAL_OFF"
-                            CallMonitorForegroundService.autoRecordOttEnabled = false
-                            getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
-                                .putString("disableMode", "MANUAL_OFF")
-                                .putBoolean("autoRecordOttEnabled", false)
-                                .apply()
-                            CallMonitorForegroundService.dismissBridgeAlertNotification(this)
-                            CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
-                            try {
-                                val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                                    action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
-                                }
-                                startService(stopIntent)
-                            } catch (_: Exception) {
-                            }
+                            stopAudioPlayback()
+                            CallMonitorForegroundService.setMasterAppPowerState(this, false)
                             result.success(
                                 mapOf(
                                     "enabled" to false,
+                                    "masterAppEnabled" to false,
                                     "accessibilityEnabled" to false
                                 )
                             )
+                            if (closeApp) {
+                                window.decorView.postDelayed({
+                                    try {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                            finishAndRemoveTask()
+                                        } else {
+                                            finishAffinity()
+                                        }
+                                    } catch (_: Exception) {
+                                        finish()
+                                    }
+                                }, 180L)
+                            }
                         }
                     }
 
                     "disableAccessibilityManual" -> {
-                        CallMonitorForegroundService.disableMode = "MANUAL_OFF"
-                        CallMonitorForegroundService.autoRecordOttEnabled = false
-                        getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("disableMode", "MANUAL_OFF")
-                            .putBoolean("autoRecordOttEnabled", false)
-                            .apply()
-                        CallMonitorForegroundService.dismissBridgeAlertNotification(this)
-                        CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
-                        try {
-                            val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                                action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
-                            }
-                            startService(stopIntent)
-                        } catch (_: Exception) {
-                        }
+                        CallMonitorForegroundService.setMasterAppPowerState(this, false)
                         result.success(true)
                     }
 
@@ -418,50 +401,45 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "updateSettings" -> {
-                        val autoOtt = call.argument<Boolean>("autoRecordOttEnabled") ?: true
-                        val gain = call.argument<Double>("remoteGainBoost")?.toFloat() ?: 2.2f
-                        val boostVol = call.argument<Boolean>("autoBoostVolume") ?: true
+                        val gain = call.argument<Double>("remoteGainBoost")?.toFloat() ?: CallMonitorForegroundService.remoteGainBoost
+                        val boostVol = call.argument<Boolean>("autoBoostVolume") ?: CallMonitorForegroundService.autoBoostVolume
                         val clampedGain = gain.coerceIn(1.0f, 4.0f)
-                        CallMonitorForegroundService.autoRecordOttEnabled = autoOtt
                         CallMonitorForegroundService.remoteGainBoost = clampedGain
                         CallMonitorForegroundService.autoBoostVolume = boostVol
-                        val newDisableMode = if (autoOtt) "NONE" else "MANUAL_OFF"
-                        CallMonitorForegroundService.disableMode = newDisableMode
                         getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
-                            .putBoolean("autoRecordOttEnabled", autoOtt)
-                            .putString("disableMode", newDisableMode)
                             .putFloat("remoteGainBoost", clampedGain)
                             .putBoolean("autoBoostVolume", boostVol)
-                            .apply()
-                        if (autoOtt) {
-                            startGuardService()
-                            if (CallMonitorForegroundService.hasWriteSecureSettings(this) &&
-                                !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
-                            ) {
-                                CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this, force = true)
-                            }
-                        } else {
-                            CallMonitorForegroundService.dismissBridgeAlertNotification(this)
-                            CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
-                            try {
-                                val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                                    action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
+                            .commit()
+
+                        val explicitAutoOtt = call.argument<Boolean>("autoRecordOttEnabled")
+                        if (explicitAutoOtt != null) {
+                            if (explicitAutoOtt) {
+                                CallMonitorForegroundService.setMasterAppPowerState(this, true)
+                                startGuardService(userExplicitEnable = true)
+                                if (CallMonitorForegroundService.hasWriteSecureSettings(this) &&
+                                    !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
+                                ) {
+                                    CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this, force = true)
                                 }
-                                startService(stopIntent)
-                            } catch (_: Exception) {
+                            } else {
+                                CallMonitorForegroundService.setMasterAppPowerState(this, false)
                             }
                         }
                         result.success(true)
                     }
 
                     "startManualRecording" -> {
+                        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
+                            result.error("APP_DISABLED", "Ứng dụng đang ở trạng thái TẮT. Vui lòng bấm BẬT ứng dụng trước.", null)
+                            return@setMethodCallHandler
+                        }
                         if (!hasMicPermission()) {
                             requestRuntimePermissions()
                             result.error("NO_MIC_PERM", "Chưa cấp quyền Microphone", null)
                             return@setMethodCallHandler
                         }
                         if (!CallMonitorForegroundService.isGuardRunning) {
-                            startGuardService()
+                            startGuardService(userExplicitEnable = false)
                         }
                         CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this)
                         val appTag = call.argument<String>("appTag") ?: "Zalo_Test"
@@ -625,10 +603,17 @@ class MainActivity : FlutterActivity() {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    private fun startGuardService() {
+    private fun startGuardService(userExplicitEnable: Boolean = false) {
+        if (!userExplicitEnable && !CallMonitorForegroundService.isMasterAppEnabled(this)) {
+            return
+        }
         try {
             val svcIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
-                action = CallMonitorForegroundService.ACTION_START_GUARD
+                action = if (userExplicitEnable) {
+                    CallMonitorForegroundService.ACTION_USER_ENABLE_APP
+                } else {
+                    CallMonitorForegroundService.ACTION_START_GUARD
+                }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(svcIntent)

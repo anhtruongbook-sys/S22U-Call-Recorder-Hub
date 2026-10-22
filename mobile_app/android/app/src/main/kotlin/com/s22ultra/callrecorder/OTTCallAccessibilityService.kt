@@ -197,6 +197,11 @@ class OTTCallAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
+            CallMonitorForegroundService.lastDetectedApp = "Ứng dụng ĐÃ TẮT HOÀN TOÀN (Không tự bật lại trừ khi bấm BẬT)"
+            safelyDisableSelfNow()
+            return
+        }
         instance = this
         CallMonitorForegroundService.dismissBridgeAlertNotification(this)
         CallMonitorForegroundService.lastDetectedApp = "Cầu nối 2 chiều S22U Call Bridge ĐANG BẬT (Sẵn sàng thu âm)"
@@ -255,6 +260,10 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
+            safelyDisableSelfNow()
+            return
+        }
         if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
 

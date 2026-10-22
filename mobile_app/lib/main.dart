@@ -299,24 +299,43 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     double? remoteGainBoost,
     bool? autoBoostVolume,
   }) async {
-    final newAutoOtt = autoRecordOtt ?? (_status['autoRecordOttEnabled'] == true);
+    if (autoRecordOtt != null) {
+      await _toggleMasterRecordingFeature(autoRecordOtt);
+      return;
+    }
     final newGain = remoteGainBoost ?? ((_status['remoteGainBoost'] as num?)?.toDouble() ?? 2.2);
     final newBoostVol = autoBoostVolume ?? (_status['autoBoostVolume'] == true);
 
     await _channel.invokeMethod('updateSettings', {
-      'autoRecordOttEnabled': newAutoOtt,
       'remoteGainBoost': newGain,
       'autoBoostVolume': newBoostVol,
     });
     await _refreshStatusOnly();
   }
 
-  Future<void> _toggleMasterRecordingFeature(bool enable) async {
+  Future<void> _toggleMasterRecordingFeature(
+    bool enable, {
+    bool closeApp = false,
+  }) async {
+    if (mounted) {
+      setState(() {
+        _status['masterAppEnabled'] = enable;
+        _status['autoRecordOttEnabled'] = enable;
+        _status['disableMode'] = enable ? 'NONE' : 'MANUAL_OFF';
+        if (!enable) {
+          _status['isRecording'] = false;
+          _status['accessibilityEnabled'] = false;
+          _status['guardServiceRunning'] = false;
+        }
+      });
+    }
     try {
       final res = await _channel.invokeMethod('setMasterRecordingEnabled', {
         'enabled': enable,
         'openSettingsIfNeeded': false,
+        'closeApp': closeApp,
       });
+      if (closeApp && !enable) return;
       await _refreshAll();
       if (!mounted) return;
       if (enable) {
@@ -326,15 +345,17 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
           SnackBar(
             content: Text(
               a11yOn
-                  ? '✅ Đã BẬT chức năng tự động ghi âm cuộc gọi (SIM & Zalo/OTT)!'
-                  : '✅ Đã BẬT dịch vụ ghi âm! Hãy bấm "Bật S22U Call Bridge Ngay" nếu muốn thu 2 chiều Zalo.',
+                  ? '✅ Đã BẬT ứng dụng & tự động ghi âm cuộc gọi (SIM & Zalo/OTT)!'
+                  : '✅ Đã BẬT ứng dụng! Hãy bấm "Bật S22U Call Bridge Ngay" nếu muốn thu 2 chiều Zalo.',
             ),
           ),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('⏹️ Đã TẮT hoàn toàn chức năng ghi âm cuộc gọi (0% Pin).'),
+            content: Text(
+              '⏹️ Đã TẮT hoàn toàn ứng dụng (0% Pin). Sẽ KHÔNG tự bật lại trừ khi bạn bấm nút BẬT!',
+            ),
           ),
         );
       }
@@ -347,6 +368,23 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
       await _channel.invokeMethod('stopRecording');
       await _refreshAll();
     } else {
+      final disableMode = (_status['disableMode'] ?? 'NONE').toString();
+      final masterOn = (_status['masterAppEnabled'] ??
+              ((_status['autoRecordOttEnabled'] ?? true) == true &&
+                  disableMode != 'MANUAL_OFF')) ==
+          true;
+      if (!masterOn) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                '⚠️ Ứng dụng đang TẮT. Vui lòng bấm nút "BẬT ỨNG DỤNG" ở trên trước khi ghi âm!',
+              ),
+            ),
+          );
+        }
+        return;
+      }
       await _channel.invokeMethod('startManualRecording', {'appTag': _manualAppTag});
       await _refreshStatusOnly();
     }
@@ -391,8 +429,9 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final lockEnabled = _security['lockEnabled'] == true;
 
     final disableMode = (_status['disableMode'] ?? 'NONE').toString();
-    final masterRecordingEnabled =
-        (autoOtt == true) && (disableMode != 'MANUAL_OFF');
+    final masterRecordingEnabled = (_status['masterAppEnabled'] ??
+            ((autoOtt == true) && (disableMode != 'MANUAL_OFF'))) ==
+        true;
 
     return DefaultTabController(
       length: 3,
@@ -408,8 +447,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               ),
               Text(
                 masterRecordingEnabled
-                    ? 'ĐANG BẬT GHI ÂM • $model (Android $androidVer)'
-                    : 'ĐÃ TẮT GHI ÂM • $model (Android $androidVer)',
+                    ? 'ỨNG DỤNG ĐANG BẬT • $model (Android $androidVer)'
+                    : 'ỨNG DỤNG ĐÃ TẮT (KHÔNG TỰ BẬT LẠI) • $model',
                 style: TextStyle(
                   fontSize: 11.2,
                   fontWeight: FontWeight.w600,
@@ -423,8 +462,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
           actions: [
             IconButton(
               tooltip: masterRecordingEnabled
-                  ? 'Đang BẬT ghi âm (Chạm để TẮT)'
-                  : 'Đang TẮT ghi âm (Chạm để BẬT)',
+                  ? 'Ứng dụng đang BẬT (Chạm để TẮT ứng dụng)'
+                  : 'Ứng dụng đang TẮT (Chạm để BẬT ứng dụng)',
               icon: Icon(
                 Icons.power_settings_new,
                 color: masterRecordingEnabled ? Colors.greenAccent : Colors.redAccent,
@@ -730,13 +769,14 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final cs = Theme.of(context).colorScheme;
     final disableMode = (_status['disableMode'] ?? 'NONE').toString();
     final autoOtt = _status['autoRecordOttEnabled'] ?? true;
-    final masterRecordingEnabled =
-        (autoOtt == true) && (disableMode != 'MANUAL_OFF');
+    final masterRecordingEnabled = (_status['masterAppEnabled'] ??
+            ((autoOtt == true) && (disableMode != 'MANUAL_OFF'))) ==
+        true;
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
-        // ==================== CÔNG TẮC TỔNG BẬT / TẮT CHỨC NĂNG GHI ÂM CUỘC GỌI ====================
+        // ==================== CÔNG TẮC TỔNG BẬT / TẮT ỨNG DỤNG (KHÔNG TỰ BẬT LẠI KHI ĐÃ TẮT) ====================
         Container(
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(14),
@@ -783,8 +823,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                           isRecording
                               ? 'ĐANG GHI ÂM (${_status['currentAppTag'] ?? 'OTT'}) • Peak: $peakAmp'
                               : (masterRecordingEnabled
-                                  ? 'CHỨC NĂNG GHI ÂM CUỘC GỌI: ĐANG BẬT'
-                                  : 'CHỨC NĂNG GHI ÂM CUỘC GỌI: ĐÃ TẮT'),
+                                  ? 'TRẠNG THÁI ỨNG DỤNG: ĐANG BẬT'
+                                  : 'TRẠNG THÁI ỨNG DỤNG: ĐÃ TẮT HOÀN TOÀN'),
                           style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 13.8,
@@ -794,9 +834,9 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                         Text(
                           masterRecordingEnabled
                               ? (guardEnabled
-                                  ? 'Tự động thu âm 2 chiều SIM & Zalo/OTT • Tự ngắt 0ms khi mở Ngân hàng'
-                                  : 'Dịch vụ ghi âm đang bật • Hãy bật thêm S22U Call Bridge bên dưới để thu Zalo')
-                              : 'Đã ngắt hoàn toàn dịch vụ ghi âm tự động và Cầu nối Trợ năng (0% Pin)',
+                                  ? 'Đang trực chiến thu âm SIM & Zalo/OTT • Tự ngắt 0ms khi mở Ngân hàng'
+                                  : 'Ứng dụng đang BẬT • Hãy bật thêm S22U Call Bridge bên dưới để thu Zalo')
+                              : 'Đã ngắt 100% dịch vụ chạy ngầm (0% Pin). Tuyệt đối KHÔNG tự bật lại trừ khi bạn bấm vào nút BẬT.',
                           style: TextStyle(
                             fontSize: 11.8,
                             color: cs.onSurfaceVariant,
@@ -813,35 +853,71 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                 ],
               ),
               const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: masterRecordingEnabled
-                        ? Colors.redAccent.withOpacity(0.88)
-                        : Colors.green.shade700,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                  ),
-                  onPressed: () =>
-                      _toggleMasterRecordingFeature(!masterRecordingEnabled),
-                  icon: Icon(
-                    masterRecordingEnabled
-                        ? Icons.power_off
-                        : Icons.power_settings_new,
-                    size: 18,
-                  ),
-                  label: Text(
-                    masterRecordingEnabled
-                        ? 'TẮT CHỨC NĂNG GHI ÂM CUỘC GỌI'
-                        : 'BẬT CHỨC NĂNG GHI ÂM CUỘC GỌI',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
+              if (masterRecordingEnabled)
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.redAccent.withOpacity(0.88),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        onPressed: () =>
+                            _toggleMasterRecordingFeature(false, closeApp: false),
+                        icon: const Icon(Icons.power_off, size: 18),
+                        label: const Text(
+                          'TẮT ỨNG DỤNG',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12.8,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.orangeAccent,
+                          side: const BorderSide(color: Colors.orangeAccent),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        onPressed: () =>
+                            _toggleMasterRecordingFeature(false, closeApp: true),
+                        icon: const Icon(Icons.exit_to_app, size: 18),
+                        label: const Text(
+                          'TẮT & ĐÓNG APP',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.green.shade700,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                    ),
+                    onPressed: () =>
+                        _toggleMasterRecordingFeature(true, closeApp: false),
+                    icon: const Icon(Icons.power_settings_new, size: 19),
+                    label: const Text(
+                      'BẬT ỨNG DỤNG (KÍCH HOẠT GHI ÂM)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13.2,
+                      ),
                     ),
                   ),
                 ),
-              ),
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 10),
                 child: Divider(height: 1),

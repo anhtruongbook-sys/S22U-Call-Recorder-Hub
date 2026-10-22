@@ -62,16 +62,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v3.0.0
-          name: "S22 Ultra Call Recorder Hub v3.0.0 (100% Continuous Voice Capture + Master ON/OFF Toggle + Always-Open 512-FFT Wiener DSP)"
+          tag_name: v3.0.1
+          name: "S22 Ultra Call Recorder Hub v3.0.1 (True Master App ON/OFF Power Lock + 100% Continuous Voice Capture)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.0)
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.1)
+            - **Công Tắc Nguồn Tổng `BẬT / TẮT ỨNG DỤNG` (True Master Power Lock — Khi Đã Tắt Tuyệt Đối Không Tự Bật Lại)**:
+              + Khi bấm **`TẮT ỨNG DỤNG`** (hoặc **`TẮT & ĐÓNG APP`**), ứng dụng lập tức ngắt 100% dịch vụ chạy ngầm (`CallMonitorForegroundService`), ngắt Cầu nối Trợ năng (`OTTCallAccessibilityService`), ngắt bộ lắng nghe phần cứng (`OTTCallNotificationListener`), khóa `CallBootBroadcastReceiver` ở cấp `PackageManager` và lưu cờ khóa cứng `masterAppEnabled = false` đồng bộ (`.commit()`).
+              + **Bất biến Không Tự Bật Lại**: Khi đang ở trạng thái ĐÃ TẮT, ứng dụng tuyệt đối **KHÔNG BAO GIỜ tự bật lại** (dù mở lại giao diện App để nghe file cũ, có cuộc gọi SIM/Zalo đến, chuyển tab hay khởi động lại điện thoại) cho đến khi người dùng chủ động bấm vào nút **`BẬT ỨNG DỤNG`**.
             - **Khắc Phục Triệt Để Lỗi Mất Tiếng ("Đa Số Không Thu Được Tiếng")**:
-              + **Loại bỏ vòng lặp tự hủy `AudioRecord` sau `128ms` (`consecutiveSilentHops >= 8`)**: Ở bản `v2.9.8/v2.9.9`, khi khoảng lặng giữa hai câu nói kéo dài `128ms` (`8 khung x 16ms`), hệ thống誤 nhận là mất luồng và tự động đóng/mở lại `AudioRecord` liên tiếp 24 lần (đồng thời gọi `open` trước khi `release` luồng cũ gây xung đột Audio HAL). Bản `v3.0.0` chỉ phục hồi luồng khi mẫu thô bằng `0` tuyệt đối suốt `2.0 giây` (`125 khung`) và luôn đóng luồng cũ trước khi mở luồng mới.
-              + **Thay thế Cổng Cắt Tiếng `Pitch Gate (0.025x)` bằng Bộ Khuếch Đại Giọng Nói Luôn Mở (`Always-Open 512-Point FFT Bandpass 200Hz–3600Hz + Capped Wiener`)**: Không bao giờ cắt nhầm giọng nói qua loa thoại hoặc giọng nén qua codec Zalo/SIM, đồng thời khóa trần bộ ước lượng nhiễu nền (`noiseRms <= 36`) để không bao giờ học nhầm tiếng "Alo" đầu cuộc gọi thành nhiễu nền.
-              + **Loại bỏ các từ khóa nhận diện nhầm làm tự tắt Cầu nối (`"shb"`, `"ocb"`, `"msb"`, `"vib "`, `vn.zalopay.sdk`)** và bổ sung **Thông báo Cảnh báo Ưu tiên Cao 1 chạm (`⚠️ Cầu nối Ghi âm đang TẮT — Chạm để BẬT LẠI`)** khi Cầu nối tạm ngắt cho Ngân hàng.
-            - **Bổ Sung Công Tắc & Nút Bấm Tổng `BẬT / TẮT CHỨC NĂNG GHI ÂM CUỘC GỌI`**:
-              + Đặt ngay đầu màn hình chính (Tab 1), trên thanh tiêu đề (`AppBar`) và trên thanh thông báo trạng thái, giúp Bật/Tắt toàn bộ chức năng ghi âm cuộc gọi chỉ với 1 chạm.
+              + Loại bỏ vòng lặp tự hủy `AudioRecord` sau `128ms` và thay thế cổng `Pitch Gate` bằng Bộ Khuếch Đại Giọng Nói Luôn Mở (`Always-Open 512-Point FFT Bandpass 200Hz–3600Hz + Capped Wiener`).
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false
