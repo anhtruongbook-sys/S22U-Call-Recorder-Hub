@@ -262,10 +262,73 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
 
+                    "setMasterRecordingEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: true
+                        val openSettingsIfNeeded = call.argument<Boolean>("openSettingsIfNeeded") ?: false
+                        if (enabled) {
+                            if (!hasMicPermission()) {
+                                requestRuntimePermissions()
+                            }
+                            CallMonitorForegroundService.disableMode = "NONE"
+                            CallMonitorForegroundService.autoRecordOttEnabled = true
+                            getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
+                                .putString("disableMode", "NONE")
+                                .putBoolean("autoRecordOttEnabled", true)
+                                .apply()
+                            startGuardService()
+                            val hasWriteSec = CallMonitorForegroundService.hasWriteSecureSettings(this)
+                            if (hasWriteSec && !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                                CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this, force = true)
+                            } else if (openSettingsIfNeeded && !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    startActivity(intent)
+                                } catch (_: Exception) {
+                                }
+                            }
+                            result.success(
+                                mapOf(
+                                    "enabled" to true,
+                                    "accessibilityEnabled" to OTTCallAccessibilityService.isAccessibilityServiceEnabled(this),
+                                    "writeSecureSettingsGranted" to hasWriteSec
+                                )
+                            )
+                        } else {
+                            CallMonitorForegroundService.disableMode = "MANUAL_OFF"
+                            CallMonitorForegroundService.autoRecordOttEnabled = false
+                            getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
+                                .putString("disableMode", "MANUAL_OFF")
+                                .putBoolean("autoRecordOttEnabled", false)
+                                .apply()
+                            CallMonitorForegroundService.dismissBridgeAlertNotification(this)
+                            CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
+                            try {
+                                val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                                    action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
+                                }
+                                startService(stopIntent)
+                            } catch (_: Exception) {
+                            }
+                            result.success(
+                                mapOf(
+                                    "enabled" to false,
+                                    "accessibilityEnabled" to false
+                                )
+                            )
+                        }
+                    }
+
                     "disableAccessibilityManual" -> {
                         CallMonitorForegroundService.disableMode = "MANUAL_OFF"
+                        CallMonitorForegroundService.autoRecordOttEnabled = false
                         getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE)
-                            .edit().putString("disableMode", "MANUAL_OFF").apply()
+                            .edit()
+                            .putString("disableMode", "MANUAL_OFF")
+                            .putBoolean("autoRecordOttEnabled", false)
+                            .apply()
+                        CallMonitorForegroundService.dismissBridgeAlertNotification(this)
                         CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
                         try {
                             val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
@@ -362,11 +425,32 @@ class MainActivity : FlutterActivity() {
                         CallMonitorForegroundService.autoRecordOttEnabled = autoOtt
                         CallMonitorForegroundService.remoteGainBoost = clampedGain
                         CallMonitorForegroundService.autoBoostVolume = boostVol
+                        val newDisableMode = if (autoOtt) "NONE" else "MANUAL_OFF"
+                        CallMonitorForegroundService.disableMode = newDisableMode
                         getSharedPreferences(REC_PREFS, Context.MODE_PRIVATE).edit()
                             .putBoolean("autoRecordOttEnabled", autoOtt)
+                            .putString("disableMode", newDisableMode)
                             .putFloat("remoteGainBoost", clampedGain)
                             .putBoolean("autoBoostVolume", boostVol)
                             .apply()
+                        if (autoOtt) {
+                            startGuardService()
+                            if (CallMonitorForegroundService.hasWriteSecureSettings(this) &&
+                                !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
+                            ) {
+                                CallMonitorForegroundService.enableEphemeralAccessibilityForCall(this, force = true)
+                            }
+                        } else {
+                            CallMonitorForegroundService.dismissBridgeAlertNotification(this)
+                            CallMonitorForegroundService.disableEphemeralAccessibilityAfterCall(this)
+                            try {
+                                val stopIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                                    action = CallMonitorForegroundService.ACTION_STOP_GUARD_MANUAL
+                                }
+                                startService(stopIntent)
+                            } catch (_: Exception) {
+                            }
+                        }
                         result.success(true)
                     }
 

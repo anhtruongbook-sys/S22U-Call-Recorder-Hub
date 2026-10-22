@@ -63,10 +63,6 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "com.bvbank.digimi",
             "com.abbank.youbank",
             "com.pvcombank.PSG",
-            "com.mservice.momotransfer",
-            "vn.zalopay.sdk",
-            "com.bplus.vtpay",
-            "com.vnptit.innovation.vnptpay",
             "com.vnpay.wallet",
             "com.vnid",
             "vn.gov.eid",
@@ -74,14 +70,21 @@ class OTTCallAccessibilityService : AccessibilityService() {
             "vn.gov.gdt.etaxmobile"
         )
 
-        val BANKING_KEYWORDS = listOf(
-            "bank", "vcb", "vietcombank", "bidv", "ipay", "vietinbank",
-            "mbmobile", "mbbank", "mb bank", "techcombank", "vpbank",
-            "agribank", "sacombank", "tpbank", "hdbank", "myvib", "vib ",
-            "ocb", "seabank", "lpbank", "lienviet", "shb", "eximbank",
-            "msb", "nam a", "abbank", "pvcombank", "bvbank", "timo",
-            "cake", "tnex", "vnid", "vneid", "smartbanking", "digibank",
-            "mbanking", "ebanking", "ngân hàng", "etax"
+        val BANKING_PACKAGE_KEYWORDS = listOf(
+            "vietcombank", "vnpay.bidv", "vietinbank", "techcombank",
+            "mbmobile", "vpbankonline", "agribank", "sacombank",
+            "shb.mbanking", "hdbank", "myvib", "ocb.omni", "seabank",
+            "msb.mbanking", "lienviet24h", "eximbank", "namabank",
+            "abbank", "pvcombank", "bvbank", "vn.gov.eid", "etaxmobile"
+        )
+
+        val EXACT_BANKING_ICON_LABELS = setOf(
+            "vcb digibank", "vietcombank", "bidv smartbanking", "bidv",
+            "vietinbank ipay", "techcombank", "techcombank mobile",
+            "mbbank", "mb bank", "acb one", "vpbank neo", "tpbank mobile",
+            "agribank plus", "agribank", "sacombank pay", "sacombank mbanking",
+            "hdbank", "myvib", "ocb omni", "seabank", "lpbank", "shb mobile",
+            "msb mbanhking", "msb", "vneid", "etax mobile"
         )
 
         fun isAccessibilityServiceEnabled(context: Context): Boolean {
@@ -101,9 +104,8 @@ class OTTCallAccessibilityService : AccessibilityService() {
         fun isLauncherPackage(pkg: String): Boolean {
             if (pkg.isBlank()) return false
             val lower = pkg.lowercase()
-            return lower.contains("launcher") ||
-                    lower.contains("home") ||
-                    lower == "com.sec.android.app.launcher"
+            return lower == "com.sec.android.app.launcher" ||
+                    lower.endsWith(".launcher")
         }
 
         fun isSystemOrSafePackage(pkg: String): Boolean {
@@ -121,23 +123,13 @@ class OTTCallAccessibilityService : AccessibilityService() {
             if (isSystemOrSafePackage(pkg)) return false
             if (BANKING_AND_GOV_PACKAGES.contains(pkg)) return true
             val lower = pkg.lowercase()
-            return BANKING_KEYWORDS.any { lower.contains(it) }
+            return BANKING_PACKAGE_KEYWORDS.any { lower.contains(it) }
         }
 
         fun isBankingIconLabelClicked(labelText: String): Boolean {
-            val clean = labelText.trim()
-            // Tên icon ứng dụng trên màn hình chính luôn ngắn (2..32 ký tự), tránh bắt nhầm widget dọn RAM ("500 MB")
-            if (clean.length !in 2..32) return false
-            val lower = clean.lowercase()
-            if (lower.contains("s22u") || lower.contains("call recorder") || lower.contains("trợ năng")) {
-                return false
-            }
-            if (Regex("\\d+\\s*mb\\b").containsMatchIn(lower)) {
-                return false
-            }
-            return BANKING_KEYWORDS.any { lower.contains(it) } ||
-                    lower == "mb" || lower == "mbbank" || lower == "acb" || lower == "vib" ||
-                    lower == "shb" || lower == "ocb" || lower == "msb"
+            val clean = labelText.trim().lowercase()
+            if (clean.length !in 3..28) return false
+            return EXACT_BANKING_ICON_LABELS.contains(clean)
         }
     }
 
@@ -206,6 +198,8 @@ class OTTCallAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        CallMonitorForegroundService.dismissBridgeAlertNotification(this)
+        CallMonitorForegroundService.lastDetectedApp = "Cầu nối 2 chiều S22U Call Bridge ĐANG BẬT (Sẵn sàng thu âm)"
 
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val mode = am?.mode ?: AudioManager.MODE_NORMAL
@@ -226,7 +220,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
         if (dspEngine.isRecording) {
             attachAccessibilityAudioAnchor()
             dspEngine.requestAccessibilityStreamUpgrade()
-        } else if (inCallNow) {
+        } else if (inCallNow && CallMonitorForegroundService.autoRecordOttEnabled && CallMonitorForegroundService.disableMode != "MANUAL_OFF") {
             attachAccessibilityAudioAnchor()
             startCallRecordingFromAccessibilityBridge(mode)
         }

@@ -62,16 +62,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v2.9.9
-          name: "S22 Ultra Call Recorder Hub v2.9.9 (Loud Studio Voice + Zero-Noise 512-Point FFT Amplitude Wiener + Linear Confirmed-Voice Normalizer)"
+          tag_name: v3.0.0
+          name: "S22 Ultra Call Recorder Hub v3.0.0 (100% Continuous Voice Capture + Master ON/OFF Toggle + Always-Open 512-FFT Wiener DSP)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v2.9.9)
-            - **Nâng Cấp Âm Lượng Giọng Nói Chuẩn Studio (`Peak ~ 26.800`, `-1.7 dBFS`) Mà Vẫn Giữ Nền Tĩnh Lặng Tuyệt Đối (`Silence RMS < 2.0`, `SNR > 80 dB`)**:
-              + Chuyển hàm truyền đạt Wiener từ tỷ số công suất $P_{\text{clean}} / P$ sang **Bộ Lọc Biên Độ Wiener Chuẩn ($\sqrt{P_{\text{clean}} / P}$)**, khôi phục trọn vẹn năng lượng hài âm giọng nói tự nhiên.
-              + Khi cổng chu kỳ dây thanh quản người (`Wiener-Khinchin Pitch Gate`, `85 Hz – 365 Hz`) xác nhận có $\ge 2$ khung sóng hài giọng nói liên tiếp (`pitchCorr >= 0.45`), bộ khuếch đại giọng nói mở tức thời lên mức mục tiêu `6500 / cleanRms` (tối đa `8.5x`) kèm thời gian ngân đuôi âm tiết `8 khung (128ms)`, trong khi tạp âm nền không tuần hoàn vẫn bị khóa chặt ở `-32 dB` (`0.025x`).
-              + Bổ sung **Bộ Chuẩn Hóa Tuyến Tính Hằng Số Có Xác Thực Giọng Nói (`normalizeConfirmedVoiceWavLinear`)**: chỉ kích hoạt khi cuộc gọi có tối thiểu $\ge 12$ khung giọng người đã xác thực, nhân một hệ số tuyến tính hằng số duy nhất đưa đỉnh giọng nói lên `26.800 / 32.767` (`-1.7 dBFS`) mà không làm tăng tiếng ồn nền (vì nền đã ở mức `< 1.0`, nhân tuyến tính vẫn giữ nền `< 4.0` / `-78 dBFS`).
-              + Tích hợp `LoudnessEnhancer (+4.0 dB)` cho trình phát nội bộ trong ứng dụng và nâng mức âm lượng loa thoại tự động lên `85%`.
-            - **Giữ Nguyên Lá Chắn Tàng Hình Ngân Hàng `0ms` (`v2.9.7`)**: Tự động ngắt `OTTCallAccessibilityService` ngay khi mở App Ngân hàng / VNeID.
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.0)
+            - **Khắc Phục Triệt Để Lỗi Mất Tiếng ("Đa Số Không Thu Được Tiếng")**:
+              + **Loại bỏ vòng lặp tự hủy `AudioRecord` sau `128ms` (`consecutiveSilentHops >= 8`)**: Ở bản `v2.9.8/v2.9.9`, khi khoảng lặng giữa hai câu nói kéo dài `128ms` (`8 khung x 16ms`), hệ thống誤 nhận là mất luồng và tự động đóng/mở lại `AudioRecord` liên tiếp 24 lần (đồng thời gọi `open` trước khi `release` luồng cũ gây xung đột Audio HAL). Bản `v3.0.0` chỉ phục hồi luồng khi mẫu thô bằng `0` tuyệt đối suốt `2.0 giây` (`125 khung`) và luôn đóng luồng cũ trước khi mở luồng mới.
+              + **Thay thế Cổng Cắt Tiếng `Pitch Gate (0.025x)` bằng Bộ Khuếch Đại Giọng Nói Luôn Mở (`Always-Open 512-Point FFT Bandpass 200Hz–3600Hz + Capped Wiener`)**: Không bao giờ cắt nhầm giọng nói qua loa thoại hoặc giọng nén qua codec Zalo/SIM, đồng thời khóa trần bộ ước lượng nhiễu nền (`noiseRms <= 36`) để không bao giờ học nhầm tiếng "Alo" đầu cuộc gọi thành nhiễu nền.
+              + **Loại bỏ các từ khóa nhận diện nhầm làm tự tắt Cầu nối (`"shb"`, `"ocb"`, `"msb"`, `"vib "`, `vn.zalopay.sdk`)** và bổ sung **Thông báo Cảnh báo Ưu tiên Cao 1 chạm (`⚠️ Cầu nối Ghi âm đang TẮT — Chạm để BẬT LẠI`)** khi Cầu nối tạm ngắt cho Ngân hàng.
+            - **Bổ Sung Công Tắc & Nút Bấm Tổng `BẬT / TẮT CHỨC NĂNG GHI ÂM CUỘC GỌI`**:
+              + Đặt ngay đầu màn hình chính (Tab 1), trên thanh tiêu đề (`AppBar`) và trên thanh thông báo trạng thái, giúp Bật/Tắt toàn bộ chức năng ghi âm cuộc gọi chỉ với 1 chạm.
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

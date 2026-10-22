@@ -38,7 +38,9 @@ class CallMonitorForegroundService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "s22u_call_recorder_guard"
+        private const val ALERT_CHANNEL_ID = "s22u_bridge_restore_alert"
         private const val NOTIF_ID = 2201
+        private const val ALERT_NOTIF_ID = 2202
 
         const val ACTION_START_GUARD = "com.s22ultra.callrecorder.ACTION_START_GUARD"
         const val ACTION_STOP_GUARD_MANUAL = "com.s22ultra.callrecorder.ACTION_STOP_GUARD_MANUAL"
@@ -212,6 +214,57 @@ class CallMonitorForegroundService : Service() {
         fun onBankingStealthEngaged(context: Context) {
             disableEphemeralAccessibilityAfterCall(context)
             instance?.onBankingStealthTriggeredInternal()
+            if (!hasWriteSecureSettings(context) && disableMode != "MANUAL_OFF") {
+                showBridgeDisabledAlertNotification(
+                    context,
+                    "Cầu nối S22U Call Bridge vừa tạm tắt để bạn dùng App Ngân hàng. Dùng xong Ngân hàng, hãy chạm vào đây để BẬT LẠI GHI ÂM!"
+                )
+            }
+        }
+
+        fun dismissBridgeAlertNotification(context: Context) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.cancel(ALERT_NOTIF_ID)
+            } catch (_: Exception) {
+            }
+        }
+
+        fun showBridgeDisabledAlertNotification(context: Context, message: String) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val ch = NotificationChannel(
+                        ALERT_CHANNEL_ID,
+                        "Cảnh báo Bật Lại Cầu Nối Ghi Âm",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Nhắc bật lại S22U Call Bridge sau khi thoát App Ngân hàng"
+                    }
+                    nm.createNotificationChannel(ch)
+                }
+                val a11yIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val pendingA11y = PendingIntent.getActivity(
+                    context,
+                    2202,
+                    a11yIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val alertNotif = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setContentTitle("⚠️ Cầu nối Ghi âm Cuộc gọi đang TẮT!")
+                    .setContentText(message)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setContentIntent(pendingA11y)
+                    .addAction(android.R.drawable.ic_menu_preferences, "BẬT LẠI S22U CALL BRIDGE", pendingA11y)
+                    .build()
+                nm.notify(ALERT_NOTIF_ID, alertNotif)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -398,7 +451,14 @@ class CallMonitorForegroundService : Service() {
         if (action == ACTION_STOP_GUARD_MANUAL) {
             disableMode = "MANUAL_OFF"
             autoRecordOttEnabled = false
-            lastDetectedApp = "Đã tắt chủ động trong App (0% Pin)"
+            getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putString("disableMode", "MANUAL_OFF")
+                .putBoolean("autoRecordOttEnabled", false)
+                .apply()
+            dismissBridgeAlertNotification(this)
+            disableEphemeralAccessibilityAfterCall(this)
+            lastDetectedApp = "Đã TẮT chức năng ghi âm cuộc gọi (0% Pin)"
             if (dspEngine.isRecording) {
                 dspEngine.stopRecording()
             }
@@ -412,7 +472,7 @@ class CallMonitorForegroundService : Service() {
 
         if (!isGuardRunning) {
             val notif = buildNotification(
-                contentText = "Chế độ Ngủ Đông (0.0% CPU • Không dùng Trợ năng)",
+                contentText = "Đang BẬT Tự Động Ghi Âm • Ngủ Đông (0.0% CPU)",
                 recordingNow = false
             )
             try {
@@ -432,7 +492,7 @@ class CallMonitorForegroundService : Service() {
                 isGuardRunning = true
                 disableMode = "NONE"
                 lastDetectedApp =
-                    "Ngủ đông chờ sự kiện (0.0% CPU • Không dùng Trợ năng)"
+                    "Đang BẬT Tự Động Ghi Âm • Ngủ đông chờ cuộc gọi (0.0% CPU)"
                 registerZeroBatteryHardwareCallbacks()
             } catch (_: Exception) {
             }
@@ -442,12 +502,20 @@ class CallMonitorForegroundService : Service() {
             ACTION_START_GUARD -> {
                 disableMode = "NONE"
                 autoRecordOttEnabled = true
+                getSharedPreferences("s22u_recorder_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("disableMode", "NONE")
+                    .putBoolean("autoRecordOttEnabled", true)
+                    .apply()
+                if (hasWriteSecureSettings(this) && !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                    enableEphemeralAccessibilityForCall(this, force = true)
+                }
                 lastDetectedApp =
-                    "Ngủ đông chờ sự kiện (0.0% CPU • Không dùng Trợ năng)"
+                    "Đang BẬT Tự Động Ghi Âm • Ngủ đông chờ cuộc gọi (0.0% CPU)"
                 registerZeroBatteryHardwareCallbacks()
                 evaluateAudioHardwareInterrupt()
                 updateNotification(
-                    contentText = "Chế độ Ngủ Đông (0.0% CPU • Không dùng Trợ năng)",
+                    contentText = "Đang BẬT Tự Động Ghi Âm • Ngủ Đông (0.0% CPU)",
                     recordingNow = dspEngine.isRecording
                 )
             }
@@ -593,14 +661,21 @@ class CallMonitorForegroundService : Service() {
                 hasVoipRecordingStream)
 
         if (isCall) {
+            if (disableMode == "MANUAL_OFF" || !autoRecordOttEnabled) {
+                return
+            }
             mainHandler.removeCallbacks(callEndRunnable)
             val tag = resolveActiveCallTag(mode)
 
-            if (autoRecordOttEnabled &&
-                hasWriteSecureSettings(this) &&
-                !OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)
-            ) {
-                enableEphemeralAccessibilityForCall(this, force = true)
+            if (!OTTCallAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                if (hasWriteSecureSettings(this)) {
+                    enableEphemeralAccessibilityForCall(this, force = true)
+                } else {
+                    showBridgeDisabledAlertNotification(
+                        this,
+                        "Đang có cuộc gọi ($tag) nhưng S22U Call Bridge đang TẮT! Chạm vào đây để BẬT NGAY mới thu được tiếng!"
+                    )
+                }
             }
 
             val accService = OTTCallAccessibilityService.instance
@@ -609,7 +684,7 @@ class CallMonitorForegroundService : Service() {
 
             if (!wasInActiveCall || !anyRecordingNow) {
                 wasInActiveCall = true
-                if (autoRecordOttEnabled && !anyRecordingNow) {
+                if (!anyRecordingNow) {
                     attachCallAudioAnchorIfPermitted()
                     if (accService != null) {
                         accService.startCallRecordingFromAccessibilityBridge(mode)
@@ -701,6 +776,17 @@ class CallMonitorForegroundService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             builder.addAction(android.R.drawable.ic_btn_speak_now, "Ghi Ngay", pendingRec)
+
+            val offIntent = Intent(this, CallMonitorForegroundService::class.java).apply {
+                action = ACTION_STOP_GUARD_MANUAL
+            }
+            val pendingOff = PendingIntent.getService(
+                this,
+                4,
+                offIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_lock_power_off, "Tắt Ghi Âm", pendingOff)
         }
 
         return builder.build()

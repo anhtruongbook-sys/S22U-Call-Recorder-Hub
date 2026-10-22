@@ -150,12 +150,12 @@ class AudioDspRecorderEngine(private val context: Context) {
                 currentAppTag = newTag
             }
         }
+        // Chỉ đánh dấu mốc kết nối để cập nhật tên tệp, TUYỆT ĐỐI KHÔNG ngắt luồng AudioRecord đang thu tốt!
         markCallAnsweredRequested = true
-        rebindOnCallConnectRequested = true
     }
 
     /**
-     * Mở luồng thu âm chuẩn `CHANNEL_IN_MONO` + `VOICE_RECOGNITION` (6):
+     * Mở luồng thu âm chuẩn `CHANNEL_IN_MONO` + `VOICE_RECOGNITION` (6) (kèm fallback `MIC` / `VOICE_COMMUNICATION`):
      * - Bảo toàn 100% bộ lọc khử ồn đa Mic phần cứng Qualcomm Fluence Pro (`NoiseSuppressor.enabled = true`).
      * - TUYỆT ĐỐI KHÔNG can thiệp tắt `AcousticEchoCanceler` và KHÔNG bật `AutomaticGainControl` phần cứng
      *   để tránh làm hỏng ma trận khử ồn ADSP hoặc tự động bơm tiếng xè nền phòng khi im lặng.
@@ -204,10 +204,31 @@ class AudioDspRecorderEngine(private val context: Context) {
         }
     }
 
+    private fun openBestAvailableVoiceRecord(sampleRate: Int, preferAltSource: Boolean = false): Pair<AudioRecord, Boolean>? {
+        val sources = if (preferAltSource) {
+            intArrayOf(
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            )
+        } else {
+            intArrayOf(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            )
+        }
+        for (src in sources) {
+            val opened = openCleanMonoVoiceRecord(src, sampleRate)
+            if (opened != null) return opened
+        }
+        return null
+    }
+
     @Synchronized
     fun startRecording(
         appTag: String,
-        remoteGainBoost: Float = 1.8f,
+        remoteGainBoost: Float = 2.2f,
         autoBoostEarpieceVolume: Boolean = false
     ): String? {
         if (isRecording) return currentFilePath
@@ -220,7 +241,7 @@ class AudioDspRecorderEngine(private val context: Context) {
         var selectedSampleRate = 16000
 
         outer@ for (rate in preferredRates) {
-            val opened = openCleanMonoVoiceRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, rate)
+            val opened = openBestAvailableVoiceRecord(rate, preferAltSource = false)
             if (opened != null) {
                 recorder = opened.first
                 openedWithA11y = opened.second
@@ -370,17 +391,16 @@ class AudioDspRecorderEngine(private val context: Context) {
     }
 
     /**
-     * Động cơ Lọc Phổ Biên Độ `512-Point FFT Amplitude Wiener` + Nhận Diện Chu Kỳ Dây Thanh Quản `Wiener-Khinchin Pitch Gate`:
+     * Động cơ Lọc Phổ Luôn Mở `512-Point FFT Always-Open Bandpass + Capped Wiener Denoiser` (v3.0.0):
      * 1. Cửa sổ trượt 50% Overlap-Add (`fftSize = 512`, `hopSize = 256`) dùng cửa sổ căn bậc hai Hann (`sqrt-Hann`),
      *    đảm bảo tổng chồng lấp $\sin^2 + \cos^2 \equiv 1.0$ hoàn hảo không biến dạng pha.
-     * 2. Lọc thông dải pha tuyến tính tuyệt đối (`250 Hz – 3400 Hz`): xóa về `0.0` toàn bộ vạch phổ `< 250 Hz`
-     *    (tiếng ù phòng, quạt gió, điều hòa, rung tay) và `> 3400 Hz` (tiếng xè, sôi nhiệt).
-     * 3. Định lý Wiener-Khinchin: Tính `IFFT` của phổ công suất $P[k] = |X[k]|^2$ để đo hệ số tự tương quan chuẩn hóa
-     *    $R_{\text{pitch}}$ trong dải tần số cơ bản của dây thanh quản người (`85 Hz – 365 Hz`).
-     *    - Tiếng ồn nền / tiếng xè / tạp âm có phổ ngẫu nhiên ($R_{\text{pitch}} < 0.38$) -> bị nén xuống `-32 dB` (`0.025x`).
-     *    - Khi có $\ge 2$ khung liên tiếp mang sóng hài giọng nói con người ($R_{\text{pitch}} \ge 0.45$), bộ lọc biên độ
-     *      Wiener $\sqrt{P_{\text{clean}} / P}$ kết hợp bộ khuếch đại giọng nói đã xác thực (`targetG = 6500 / cleanRms`, tối đa `8.5x`)
-     *      đưa âm lượng giọng nói lên chuẩn phát thanh (`RMS ~ 6,500`, `Peak ~ 26,800`) trong khi giữ khoảng lặng êm tuyệt đối (`RMS < 2.0`).
+     * 2. Lọc thông dải giọng nói pha tuyến tính (`200 Hz – 3600 Hz`): xóa về `0.0` toàn bộ vạch phổ `< 200 Hz`
+     *    (tiếng ù phòng, quạt gió, điều hòa, rung tay) và `> 3600 Hz` (tiếng xè, sôi nhiệt).
+     * 3. Ước lượng nhiễu nền có trần bảo vệ giọng nói (`noiseRms <= 36f`): chỉ cập nhật phổ nhiễu nền khi năng lượng
+     *    khung thực sự tĩnh (`bandRms < 38f`), tuyệt đối KHÔNG BAO GIỜ học nhầm giọng nói thành nhiễu nền.
+     * 4. KHÔNG DÙNG cổng Pitch Gate cắt tiếng (`0.025x`): Mọi âm tiết giọng nói (kể cả giọng nhỏ qua loa thoại, phụ âm
+     *    hoặc mạng Zalo/SIM nén codec) đều được khuếch đại mượt mà (`1.8x .. 6.5x`), trong khi khoảng lặng chỉ hạ nhẹ
+     *    xuống `0.30x` (`-10.5 dB`) kết hợp lọc biên độ Wiener, đảm bảo 100% cuộc gọi thu rõ tiếng và nền êm.
      */
     private fun writeWavContinuousWithAnswerBookmark(
         initialRecorder: AudioRecord,
@@ -408,39 +428,29 @@ class AudioDspRecorderEngine(private val context: Context) {
         val winPowerNorm = 2.0f / (fftSize.toFloat() * winSumSq)
 
         val binHz = sampleRate.toFloat() / fftSize.toFloat()
-        val kLo = (250f / binHz).toInt().coerceIn(2, 60)
-        val kHi = (3400f / binHz).toInt().coerceIn(kLo + 12, 250)
-        val pitchLagMin = (sampleRate / 365).coerceIn(16, 200)
-        val pitchLagMax = (sampleRate / 85).coerceIn(pitchLagMin + 10, 250)
+        val kLo = (200f / binHz).toInt().coerceIn(2, 50)
+        val kHi = (3600f / binHz).toInt().coerceIn(kLo + 12, 250)
 
         val inHistory = FloatArray(fftSize)
         val olaBuf = FloatArray(fftSize)
         val fftRe = FloatArray(fftSize)
         val fftIm = FloatArray(fftSize)
         val powerSpec = FloatArray(fftSize)
-        val acRe = FloatArray(fftSize)
-        val acIm = FloatArray(fftSize)
-        val noisePsd = FloatArray(fftSize / 2 + 1) { 450f }
+        val noisePsd = FloatArray(fftSize / 2 + 1) { 280f }
 
-        var noiseRms = 30f
-        var smoothedGain = 0.04f
-        var consecutiveVoicedFrames = 0
+        var noiseRms = 18f
+        var smoothedGain = 1.2f
         var hangoverFrames = 0
 
         val normalizedSlider = userGainSetting.coerceIn(1.0f, 4.0f)
-        val maxVoiceBoost = (3.8f + (normalizedSlider - 1.0f) * 1.8f).coerceIn(3.8f, 8.5f)
+        val maxVoiceBoost = (3.2f + (normalizedSlider - 1.0f) * 1.15f).coerceIn(3.2f, 6.8f)
 
         var totalAudioBytes = 0L
         var overallPeakRecorded = 0
-        var answeredByteOffset = 0L
-        var peakAfterAnswer = 0
+        var activeVoiceHops = 0
+        var activeVoicePeak = 0
 
-        var confirmedVoicedHops = 0
-        var confirmedVoicePeak = 0
-        var confirmedVoicedHopsAfterAnswer = 0
-        var confirmedVoicePeakAfterAnswer = 0
-
-        var consecutiveSilentHops = 0
+        var consecutiveDeadZeroHops = 0
         var recoveryAttempts = 0
         var hopsSinceStartOrReopen = 0
 
@@ -466,23 +476,16 @@ class AudioDspRecorderEngine(private val context: Context) {
 
                     if (markCallAnsweredRequested) {
                         markCallAnsweredRequested = false
-                        val maxRingingBytes = sampleRate.toLong() * 2L * 60L
-                        if (totalAudioBytes in 1L..maxRingingBytes) {
-                            answeredByteOffset = totalAudioBytes
-                            peakAfterAnswer = 0
-                            confirmedVoicedHopsAfterAnswer = 0
-                            confirmedVoicePeakAfterAnswer = 0
-                        }
                     }
 
                     // Dịch cửa sổ đầu vào sang trái 256 mẫu và nạp 256 mẫu mới vào nửa sau
                     System.arraycopy(inHistory, hopSize, inHistory, 0, fftSize - hopSize)
-                    val isStartupTransient = hopsSinceStartOrReopen <= 12
+                    val isStartupTransient = hopsSinceStartOrReopen <= 4
                     for (i in 0 until hopSize) {
                         val rawVal = if (i < collected) hopPcm[i].toInt() else 0
                         val absRaw = abs(rawVal)
                         if (absRaw > maxRawInHop) maxRawInHop = absRaw
-                        val cleanRaw = if (isStartupTransient && absRaw > 1600) 0f else rawVal.toFloat()
+                        val cleanRaw = if (isStartupTransient && absRaw > 4000) 0f else rawVal.toFloat()
                         inHistory[fftSize - hopSize + i] = cleanRaw
                     }
 
@@ -493,7 +496,7 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
                     fftInPlace512(fftRe, fftIm, invert = false)
 
-                    // Bước 2: Lọc thông dải giọng nói tuyệt đối (250 Hz – 3400 Hz) & tính phổ công suất P[k]
+                    // Bước 2: Lọc thông dải giọng nói (200 Hz – 3600 Hz) & tính phổ công suất P[k]
                     var bandPowerSum = 0f
                     for (k in 0..(fftSize / 2)) {
                         if (k < kLo || k > kHi) {
@@ -518,78 +521,51 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
                     val bandRms = sqrt(bandPowerSum * winPowerNorm)
 
-                    // Bước 3: Đo độ tuần hoàn dây thanh quản người (Wiener-Khinchin Pitch Autocorrelation)
-                    var pitchCorr = 0f
-                    if (bandRms > 8f) {
-                        for (i in 0 until fftSize) {
-                            acRe[i] = powerSpec[i]
-                            acIm[i] = 0f
-                        }
-                        fftInPlace512(acRe, acIm, invert = true)
-                        val r0 = acRe[0]
-                        if (r0 > 1e-4f) {
-                            var maxPeak = 0f
-                            for (lag in pitchLagMin..pitchLagMax) {
-                                val v = acRe[lag]
-                                if (v > maxPeak) maxPeak = v
-                            }
-                            pitchCorr = (maxPeak / r0).coerceIn(0f, 1f)
-                        }
-                    }
-
-                    // Bước 4: Cập nhật phổ công suất nhiễu nền N[k] khi khung hiện tại không chứa sóng hài giọng nói
-                    val isUnvoicedBackground = (pitchCorr < 0.38f) && (bandRms < max(110f, noiseRms * 2.2f))
-                    if (hopsSinceStartOrReopen <= 18 || isUnvoicedBackground) {
-                        val alphaN = if (hopsSinceStartOrReopen <= 18) 0.25f else 0.08f
+                    // Bước 3: Chỉ cập nhật phổ nhiễu nền khi tín hiệu thực sự là nền tĩnh (< 38f),
+                    // TUYỆT ĐỐI KHÔNG học giọng người nói làm nhiễu nền!
+                    if (bandRms < 38f) {
+                        val alphaN = 0.08f
                         val oneMinusAlpha = 1.0f - alphaN
                         for (k in kLo..kHi) {
                             noisePsd[k] = oneMinusAlpha * noisePsd[k] + alphaN * powerSpec[k]
                         }
-                        noiseRms = (oneMinusAlpha * noiseRms + alphaN * bandRms).coerceIn(14f, 160f)
+                        noiseRms = (oneMinusAlpha * noiseRms + alphaN * bandRms).coerceIn(8f, 36f)
                     }
 
-                    // Bước 5: Trừ phổ nhiễu Wiener trên từng vạch tần số & tính năng lượng giọng nói sạch
+                    // Bước 4: Trừ phổ nhiễu Wiener nhẹ nhàng & tính năng lượng giọng nói sạch
                     var cleanPowerSum = 0f
                     for (k in kLo..kHi) {
                         val p = powerSpec[k]
-                        val cleanP = max(0f, p - 2.0f * noisePsd[k])
+                        val cleanP = max(0f, p - 1.35f * noisePsd[k])
                         cleanPowerSum += cleanP
                     }
                     val cleanRms = sqrt(cleanPowerSum * winPowerNorm)
 
-                    // Bước 6: Cổng Giọng Nói Sóng Hài (yêu cầu >= 2 khung liên tiếp có chu kỳ dây thanh quản người)
-                    val isFrameVoiced = (!isStartupTransient) && (
-                        (pitchCorr >= 0.45f && cleanRms > max(22f, noiseRms * 0.80f)) ||
-                            (pitchCorr >= 0.38f && cleanRms > max(140f, noiseRms * 2.5f))
-                        )
-                    if (isFrameVoiced) {
-                        consecutiveVoicedFrames++
-                    } else {
-                        consecutiveVoicedFrames = 0
-                    }
-
-                    val desiredGain: Float = if (consecutiveVoicedFrames >= 2) {
-                        hangoverFrames = 8
-                        val targetG = 6500f / max(cleanRms, 95f)
-                        targetG.coerceIn(1.6f, maxVoiceBoost)
+                    // Bước 5: Bộ Khuếch Đại Giọng Nói Luôn Mở (Always-Open Smooth Voice Expander)
+                    // Không dùng Pitch Gate cắt tiếng để thu trọn vẹn 100% giọng nói đầu dây bên kia và giọng người gọi
+                    val isVoiceActive = (!isStartupTransient) && (cleanRms > max(14f, noiseRms * 1.15f))
+                    val desiredGain: Float = if (isVoiceActive) {
+                        hangoverFrames = 12 // Giữ ngân 192ms sau mỗi âm tiết
+                        val targetG = 6000f / max(cleanRms, 95f)
+                        targetG.coerceIn(1.8f, maxVoiceBoost)
                     } else if (hangoverFrames > 0) {
                         hangoverFrames--
-                        max(1.1f, smoothedGain * 0.82f)
+                        max(1.25f, smoothedGain * 0.86f)
                     } else {
-                        0.025f // Nén sâu -32 dB khi không có tiếng người nói -> nền tĩnh lặng tuyệt đối
+                        0.30f // Hạ nhẹ nền tĩnh -10.5 dB, không bao giờ làm mất tiếng nói nhỏ
                     }
 
                     smoothedGain = if (desiredGain > smoothedGain) {
-                        0.72f * desiredGain + 0.28f * smoothedGain
+                        0.68f * desiredGain + 0.32f * smoothedGain
                     } else {
-                        0.25f * desiredGain + 0.75f * smoothedGain
+                        0.22f * desiredGain + 0.78f * smoothedGain
                     }
 
-                    // Nhân hệ số lọc biên độ Wiener (sqrt) từng vạch tần số & hệ số cổng giọng nói
+                    // Nhân hệ số lọc biên độ Wiener (sàn bảo toàn >= 0.32f) & hệ số khuếch đại giọng nói
                     for (k in kLo..kHi) {
                         val p = powerSpec[k]
-                        val cleanP = max(0f, p - 2.0f * noisePsd[k])
-                        val wienerG = sqrt(max(0.0009f, cleanP / (p + 1e-6f)))
+                        val cleanP = max(0f, p - 1.35f * noisePsd[k])
+                        val wienerG = sqrt(max(0.10f, cleanP / (p + 1e-6f)))
                         val totalG = wienerG * smoothedGain
                         fftRe[k] *= totalG
                         fftIm[k] *= totalG
@@ -599,7 +575,7 @@ class AudioDspRecorderEngine(private val context: Context) {
                         }
                     }
 
-                    // Bước 7: Biến đổi IFFT về miền thời gian & Cộng chồng lấp 50% (Overlap-Add)
+                    // Bước 6: Biến đổi IFFT về miền thời gian & Cộng chồng lấp 50% (Overlap-Add)
                     fftInPlace512(fftRe, fftIm, invert = true)
                     for (i in 0 until fftSize) {
                         olaBuf[i] += fftRe[i] * sqrtHann[i]
@@ -629,41 +605,62 @@ class AudioDspRecorderEngine(private val context: Context) {
                     }
 
                     currentPeakAmplitude = maxOutInHop
-                    if (hopsSinceStartOrReopen > 15 && maxOutInHop > overallPeakRecorded) {
+                    if (hopsSinceStartOrReopen > 6 && maxOutInHop > overallPeakRecorded) {
                         overallPeakRecorded = maxOutInHop
                     }
-                    if (answeredByteOffset > 0L && hopsSinceStartOrReopen > 10 && maxOutInHop > peakAfterAnswer) {
-                        peakAfterAnswer = maxOutInHop
-                    }
-                    if (consecutiveVoicedFrames >= 2 && hopsSinceStartOrReopen > 12) {
-                        confirmedVoicedHops++
-                        if (maxOutInHop > confirmedVoicePeak) {
-                            confirmedVoicePeak = maxOutInHop
-                        }
-                        if (answeredByteOffset > 0L) {
-                            confirmedVoicedHopsAfterAnswer++
-                            if (maxOutInHop > confirmedVoicePeakAfterAnswer) {
-                                confirmedVoicePeakAfterAnswer = maxOutInHop
-                            }
+                    if (isVoiceActive && hopsSinceStartOrReopen > 6) {
+                        activeVoiceHops++
+                        if (maxOutInHop > activeVoicePeak) {
+                            activeVoicePeak = maxOutInHop
                         }
                     }
 
                     fos.write(outBytes, 0, hopSize * 2)
                     totalAudioBytes += (hopSize * 2).toLong()
 
-                    // Tự động làm mới luồng thu âm ngay khi cuộc gọi Zalo vừa kết nối ("Đang gọi thoại")
-                    // hoặc khi OTTCallAccessibilityService vừa gắn neo âm thanh
-                    val shouldRebindNow = rebindOnCallConnectRequested ||
-                        ((upgradeToAccessibilityRequested || !openedWithA11yContext) && OTTCallAccessibilityService.instance != null)
-                    if (upgradeToAccessibilityRequested && openedWithA11yContext && !rebindOnCallConnectRequested) {
+                    // Chỉ nâng cấp luồng khi OTTCallAccessibilityService vừa được bật thêm (mà trước đó mở chưa có A11y)
+                    val shouldUpgradeToA11y =
+                        (upgradeToAccessibilityRequested || !openedWithA11yContext) && OTTCallAccessibilityService.instance != null
+                    if (upgradeToAccessibilityRequested && openedWithA11yContext) {
                         upgradeToAccessibilityRequested = false
                     }
 
-                    if (shouldRebindNow) {
-                        rebindOnCallConnectRequested = false
+                    if (shouldUpgradeToA11y) {
                         upgradeToAccessibilityRequested = false
-                        val upgraded = openCleanMonoVoiceRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate)
+                        // BẮT BUỘC đóng luồng AudioRecord cũ TRƯỚC khi mở luồng mới để không xung đột HAL!
+                        try {
+                            activeRecorder.stop()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            activeRecorder.release()
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            Thread.sleep(35)
+                        } catch (_: Exception) {
+                        }
+                        val upgraded = openBestAvailableVoiceRecord(sampleRate, preferAltSource = false)
                         if (upgraded != null) {
+                            activeRecorder = upgraded.first
+                            openedWithA11yContext = upgraded.second
+                            activeRecorder.startRecording()
+                            hopsSinceStartOrReopen = 0
+                            consecutiveDeadZeroHops = 0
+                            inHistory.fill(0f)
+                            olaBuf.fill(0f)
+                        }
+                    } else if (maxRawInHop == 0) {
+                        // Chỉ tính là mất luồng khi mẫu thô bằng 0 tuyệt đối (maxRawInHop == 0) liên tục suốt 2.0 giây (125 hops)
+                        consecutiveDeadZeroHops++
+                        if (consecutiveDeadZeroHops >= 125 && recoveryAttempts < 4) {
+                            consecutiveDeadZeroHops = 0
+                            recoveryAttempts++
+                            if (OTTCallAccessibilityService.instance == null) {
+                                CallMonitorForegroundService.enableEphemeralAccessibilityForCall(context, force = true)
+                            }
+                            OTTCallAccessibilityService.instance?.attachAccessibilityAudioAnchor()
+                            // Đóng luồng cũ TRƯỚC khi mở lại luồng mới
                             try {
                                 activeRecorder.stop()
                             } catch (_: Exception) {
@@ -672,32 +669,15 @@ class AudioDspRecorderEngine(private val context: Context) {
                                 activeRecorder.release()
                             } catch (_: Exception) {
                             }
-                            activeRecorder = upgraded.first
-                            openedWithA11yContext = upgraded.second
-                            activeRecorder.startRecording()
-                            hopsSinceStartOrReopen = 0
-                            inHistory.fill(0f)
-                            olaBuf.fill(0f)
-                        }
-                    } else if (maxRawInHop <= 3) {
-                        consecutiveSilentHops++
-                        if (consecutiveSilentHops >= 8 && recoveryAttempts < 24) {
-                            consecutiveSilentHops = 0
-                            recoveryAttempts++
-                            if (OTTCallAccessibilityService.instance == null) {
-                                CallMonitorForegroundService.enableEphemeralAccessibilityForCall(context, force = true)
+                            try {
+                                Thread.sleep(40)
+                            } catch (_: Exception) {
                             }
-                            OTTCallAccessibilityService.instance?.attachAccessibilityAudioAnchor()
-                            val reopened = openCleanMonoVoiceRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate)
+                            val reopened = openBestAvailableVoiceRecord(
+                                sampleRate,
+                                preferAltSource = (recoveryAttempts % 2 == 1)
+                            )
                             if (reopened != null) {
-                                try {
-                                    activeRecorder.stop()
-                                } catch (_: Exception) {
-                                }
-                                try {
-                                    activeRecorder.release()
-                                } catch (_: Exception) {
-                                }
                                 activeRecorder = reopened.first
                                 openedWithA11yContext = reopened.second
                                 activeRecorder.startRecording()
@@ -707,7 +687,7 @@ class AudioDspRecorderEngine(private val context: Context) {
                             }
                         }
                     } else {
-                        consecutiveSilentHops = 0
+                        consecutiveDeadZeroHops = 0
                     }
                 }
             }
@@ -725,25 +705,16 @@ class AudioDspRecorderEngine(private val context: Context) {
             }
 
             if (outFile.exists() && totalAudioBytes > 0L) {
-                val minConversationBytes = sampleRate.toLong() * 2L * 2L // tối thiểu 2.0 giây đàm thoại
-                val conversationBytes = totalAudioBytes - answeredByteOffset
-                if (answeredByteOffset > 0L && conversationBytes >= minConversationBytes && peakAfterAnswer >= 80) {
-                    if (trimLeadingPreAnswerBytes(outFile, answeredByteOffset, conversationBytes)) {
-                        totalAudioBytes = conversationBytes
-                        overallPeakRecorded = peakAfterAnswer
-                        if (confirmedVoicedHopsAfterAnswer >= 8) {
-                            confirmedVoicedHops = confirmedVoicedHopsAfterAnswer
-                            confirmedVoicePeak = confirmedVoicePeakAfterAnswer
-                        }
-                    }
-                }
-
                 updateWavHeader(outFile, totalAudioBytes, sampleRate, 1, 16)
 
-                // Chuẩn hóa tuyến tính thuần túy (Linear Constant Gain) CHỈ KHI cuộc gọi có ít nhất >= 12 khung giọng nói
-                // có chu kỳ dây thanh quản người đã xác thực và đỉnh giọng nói chưa đạt ngưỡng chuẩn Studio (24.500).
-                if (confirmedVoicedHops >= 12 && confirmedVoicePeak in 80..24500) {
-                    normalizeConfirmedVoiceWavLinear(outFile, confirmedVoicePeak)
+                // Chuẩn hóa tuyến tính hằng số (Linear Constant Gain) đưa âm lượng giọng nói đạt chuẩn Studio (26.800)
+                val referencePeak = if (activeVoiceHops >= 6 && activeVoicePeak >= 50) {
+                    activeVoicePeak
+                } else {
+                    overallPeakRecorded
+                }
+                if (referencePeak in 50..24500) {
+                    normalizeConfirmedVoiceWavLinear(outFile, referencePeak)
                 }
 
                 val latestSafeTag = sanitizeVietnameseFileName(currentAppTag)

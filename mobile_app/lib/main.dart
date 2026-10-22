@@ -311,6 +311,36 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     await _refreshStatusOnly();
   }
 
+  Future<void> _toggleMasterRecordingFeature(bool enable) async {
+    try {
+      final res = await _channel.invokeMethod('setMasterRecordingEnabled', {
+        'enabled': enable,
+        'openSettingsIfNeeded': false,
+      });
+      await _refreshAll();
+      if (!mounted) return;
+      if (enable) {
+        final a11yOn = (res is Map && res['accessibilityEnabled'] == true) ||
+            (_status['accessibilityEnabled'] == true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              a11yOn
+                  ? '✅ Đã BẬT chức năng tự động ghi âm cuộc gọi (SIM & Zalo/OTT)!'
+                  : '✅ Đã BẬT dịch vụ ghi âm! Hãy bấm "Bật S22U Call Bridge Ngay" nếu muốn thu 2 chiều Zalo.',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⏹️ Đã TẮT hoàn toàn chức năng ghi âm cuộc gọi (0% Pin).'),
+          ),
+        );
+      }
+    } catch (_) {}
+  }
+
   Future<void> _toggleManualRecording() async {
     final isRec = _status['isRecording'] == true;
     if (isRec) {
@@ -360,6 +390,10 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final installedOtt = (_status['installedOttApps'] as List?)?.map((e) => e.toString()).toList() ?? [];
     final lockEnabled = _security['lockEnabled'] == true;
 
+    final disableMode = (_status['disableMode'] ?? 'NONE').toString();
+    final masterRecordingEnabled =
+        (autoOtt == true) && (disableMode != 'MANUAL_OFF');
+
     return DefaultTabController(
       length: 3,
       child: Scaffold(
@@ -373,15 +407,30 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
                 style: TextStyle(fontSize: 16.0, fontWeight: FontWeight.w700),
               ),
               Text(
-                '$model • Android $androidVer • Zero-Polling 0% Pin',
+                masterRecordingEnabled
+                    ? 'ĐANG BẬT GHI ÂM • $model (Android $androidVer)'
+                    : 'ĐÃ TẮT GHI ÂM • $model (Android $androidVer)',
                 style: TextStyle(
                   fontSize: 11.2,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                  color: masterRecordingEnabled
+                      ? Colors.greenAccent
+                      : Colors.orangeAccent,
                 ),
               ),
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: masterRecordingEnabled
+                  ? 'Đang BẬT ghi âm (Chạm để TẮT)'
+                  : 'Đang TẮT ghi âm (Chạm để BẬT)',
+              icon: Icon(
+                Icons.power_settings_new,
+                color: masterRecordingEnabled ? Colors.greenAccent : Colors.redAccent,
+              ),
+              onPressed: () => _toggleMasterRecordingFeature(!masterRecordingEnabled),
+            ),
             if (lockEnabled)
               IconButton(
                 tooltip: 'Khóa ứng dụng ngay',
@@ -679,10 +728,163 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     final items = _filteredRecordings;
     final playingPath = (_status['currentlyPlayingPath'] ?? '').toString();
     final cs = Theme.of(context).colorScheme;
+    final disableMode = (_status['disableMode'] ?? 'NONE').toString();
+    final autoOtt = _status['autoRecordOttEnabled'] ?? true;
+    final masterRecordingEnabled =
+        (autoOtt == true) && (disableMode != 'MANUAL_OFF');
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       children: [
+        // ==================== CÔNG TẮC TỔNG BẬT / TẮT CHỨC NĂNG GHI ÂM CUỘC GỌI ====================
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isRecording
+                ? Colors.red.withOpacity(0.12)
+                : (masterRecordingEnabled
+                    ? Colors.green.withOpacity(0.10)
+                    : cs.surfaceContainerHighest.withOpacity(0.40)),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isRecording
+                  ? Colors.redAccent
+                  : (masterRecordingEnabled
+                      ? Colors.greenAccent.withOpacity(0.75)
+                      : Colors.orangeAccent.withOpacity(0.65)),
+              width: 1.2,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isRecording
+                        ? Icons.fiber_manual_record
+                        : (masterRecordingEnabled
+                            ? Icons.power_settings_new
+                            : Icons.power_off_outlined),
+                    color: isRecording
+                        ? Colors.redAccent
+                        : (masterRecordingEnabled
+                            ? Colors.greenAccent
+                            : Colors.orangeAccent),
+                    size: 22,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isRecording
+                              ? 'ĐANG GHI ÂM (${_status['currentAppTag'] ?? 'OTT'}) • Peak: $peakAmp'
+                              : (masterRecordingEnabled
+                                  ? 'CHỨC NĂNG GHI ÂM CUỘC GỌI: ĐANG BẬT'
+                                  : 'CHỨC NĂNG GHI ÂM CUỘC GỌI: ĐÃ TẮT'),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13.8,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          masterRecordingEnabled
+                              ? (guardEnabled
+                                  ? 'Tự động thu âm 2 chiều SIM & Zalo/OTT • Tự ngắt 0ms khi mở Ngân hàng'
+                                  : 'Dịch vụ ghi âm đang bật • Hãy bật thêm S22U Call Bridge bên dưới để thu Zalo')
+                              : 'Đã ngắt hoàn toàn dịch vụ ghi âm tự động và Cầu nối Trợ năng (0% Pin)',
+                          style: TextStyle(
+                            fontSize: 11.8,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: masterRecordingEnabled,
+                    activeColor: Colors.greenAccent,
+                    onChanged: (v) => _toggleMasterRecordingFeature(v),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: masterRecordingEnabled
+                        ? Colors.redAccent.withOpacity(0.88)
+                        : Colors.green.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  onPressed: () =>
+                      _toggleMasterRecordingFeature(!masterRecordingEnabled),
+                  icon: Icon(
+                    masterRecordingEnabled
+                        ? Icons.power_off
+                        : Icons.power_settings_new,
+                    size: 18,
+                  ),
+                  label: Text(
+                    masterRecordingEnabled
+                        ? 'TẮT CHỨC NĂNG GHI ÂM CUỘC GỌI'
+                        : 'BẬT CHỨC NĂNG GHI ÂM CUỘC GỌI',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Divider(height: 1),
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _manualAppTag,
+                        isDense: true,
+                        items: const [
+                          DropdownMenuItem(value: 'Zalo', child: Text('Kênh: Zalo Call')),
+                          DropdownMenuItem(value: 'Viber', child: Text('Kênh: Viber Call')),
+                          DropdownMenuItem(value: 'Telegram', child: Text('Kênh: Telegram Call')),
+                          DropdownMenuItem(value: 'WhatsApp', child: Text('Kênh: WhatsApp Call')),
+                          DropdownMenuItem(value: 'Messenger', child: Text('Kênh: Messenger Call')),
+                          DropdownMenuItem(value: 'Ghi_Am_Nhanh', child: Text('Kênh: Ghi âm trực tiếp')),
+                        ],
+                        onChanged: isRecording
+                            ? null
+                            : (v) {
+                                if (v != null) setState(() => _manualAppTag = v);
+                              },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: isRecording ? Colors.redAccent : null,
+                      foregroundColor: isRecording ? Colors.white : null,
+                    ),
+                    onPressed: _toggleManualRecording,
+                    icon: Icon(isRecording ? Icons.stop : Icons.fiber_manual_record, size: 18),
+                    label: Text(isRecording ? 'Dừng & Lưu' : 'Ghi Thử Ngay'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
         if (!micGranted)
           Container(
             margin: const EdgeInsets.only(bottom: 12),
@@ -713,8 +915,8 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
             ),
           ),
 
-        // CHỈ HIỆN KHI CẦU NỐI THU ÂM ZALO CHƯA BẬT (BẬT XONG TỰ ĐỘNG ẨN 100% NGAY LẬP TỨC)
-        if (_status['accessibilityEnabled'] != true)
+        // CHỈ HIỆN KHI ĐANG BẬT GHI ÂM NHƯNG CẦU NỐI THU ÂM ZALO CHƯA BẬT
+        if (masterRecordingEnabled && _status['accessibilityEnabled'] != true)
           Container(
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
@@ -728,9 +930,9 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '⚠️ CẦU NỐI ZALO (S22U Call Bridge) ĐANG TẮT (Chế độ Tàng hình App Ngân hàng)!\n'
-                  '• Cầu nối tự động TẮT trong 0ms khi mở App Ngân hàng / VNeID để không bao giờ báo lỗi.\n'
-                  '• Trước khi gọi Zalo/SIM, hãy bấm "Bật S22U Call Bridge Ngay" (hoặc chạy lệnh Brevent 1 lần để App tự động Bật/Tắt ngầm 100%):',
+                  '⚠️ CẦU NỐI ZALO (S22U Call Bridge) ĐANG TẮT (Không thu được tiếng khi gọi Zalo/SIM)!\n'
+                  '• Nếu vừa mở App Ngân hàng, Cầu nối đã tự động TẮT để bảo vệ Ngân hàng.\n'
+                  '• Hãy bấm "Bật S22U Call Bridge Ngay" bên dưới để thu âm lại 100% cuộc gọi:',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, height: 1.4),
                 ),
                 const SizedBox(height: 8),
@@ -778,79 +980,6 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
               ],
             ),
           ),
-
-        // Bảng điều khiển Thu âm & Trạng thái Ngủ Đông 0% Pin
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: isRecording
-                ? Colors.red.withOpacity(0.12)
-                : cs.surfaceContainerHighest.withOpacity(0.45),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isRecording ? Colors.redAccent : cs.outlineVariant.withOpacity(0.4),
-              width: 1,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    isRecording ? Icons.fiber_manual_record : Icons.eco_outlined,
-                    color: isRecording ? Colors.redAccent : Colors.greenAccent,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      isRecording
-                          ? 'ĐANG GHI ÂM (${_status['currentAppTag'] ?? 'OTT'}) • Peak: $peakAmp'
-                          : 'Ngủ Đông 0% Pin (Tự kích hoạt kể cả khi đã tắt App)',
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _manualAppTag,
-                        isDense: true,
-                        items: const [
-                          DropdownMenuItem(value: 'Zalo', child: Text('Kênh: Zalo Call')),
-                          DropdownMenuItem(value: 'Viber', child: Text('Kênh: Viber Call')),
-                          DropdownMenuItem(value: 'Telegram', child: Text('Kênh: Telegram Call')),
-                          DropdownMenuItem(value: 'WhatsApp', child: Text('Kênh: WhatsApp Call')),
-                          DropdownMenuItem(value: 'Messenger', child: Text('Kênh: Messenger Call')),
-                          DropdownMenuItem(value: 'Ghi_Am_Nhanh', child: Text('Kênh: Ghi âm trực tiếp')),
-                        ],
-                        onChanged: isRecording
-                            ? null
-                            : (v) {
-                                if (v != null) setState(() => _manualAppTag = v);
-                              },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: isRecording ? Colors.redAccent : null,
-                    ),
-                    onPressed: _toggleManualRecording,
-                    icon: Icon(isRecording ? Icons.stop : Icons.fiber_manual_record, size: 18),
-                    label: Text(isRecording ? 'Dừng & Lưu' : 'Ghi Thử Ngay'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
 
         const SizedBox(height: 14),
 
