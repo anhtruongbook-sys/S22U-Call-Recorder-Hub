@@ -51,6 +51,8 @@
     </queries>
 
     <application
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false"
         android:label="S22U Call Recorder"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
