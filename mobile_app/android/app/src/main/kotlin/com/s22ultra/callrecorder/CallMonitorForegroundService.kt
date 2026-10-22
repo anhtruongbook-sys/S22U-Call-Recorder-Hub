@@ -125,6 +125,7 @@ class CallMonitorForegroundService : Service() {
                     .commit()
                 setBootReceiverEnabled(appCtx, true)
                 OTTCallNotificationListener.instance?.onMasterPowerChanged(true)
+                OTTCallAccessibilityService.instance?.onMasterPowerChanged(true)
             } else {
                 disableMode = "MANUAL_OFF"
                 autoRecordOttEnabled = false
@@ -135,7 +136,14 @@ class CallMonitorForegroundService : Service() {
                     .commit()
                 setBootReceiverEnabled(appCtx, false)
                 dismissBridgeAlertNotification(appCtx)
-                disableEphemeralAccessibilityAfterCall(appCtx)
+                OTTCallAccessibilityService.instance?.onMasterPowerChanged(false)
+                // CHỈ tự động gỡ quyền Trợ năng nếu máy đã có WRITE_SECURE_SETTINGS (tự bật lại được).
+                // Nếu máy chưa có WRITE_SECURE_SETTINGS, chỉ ngắt neo Overlay & đưa về ngủ đông 0% CPU để khi người dùng bấm BẬT lại không bị mất quyền thu âm Zalo!
+                if (hasWriteSecureSettings(appCtx)) {
+                    disableEphemeralAccessibilityAfterCall(appCtx)
+                } else {
+                    OTTCallAccessibilityService.instance?.detachAccessibilityAudioAnchor()
+                }
                 OTTCallNotificationListener.instance?.onMasterPowerChanged(false)
                 lastDetectedApp = "Ứng dụng ĐÃ TẮT HOÀN TOÀN (Không tự bật lại trừ khi bấm BẬT)"
                 sharedEngineInstance?.let { engine ->
@@ -759,9 +767,12 @@ class CallMonitorForegroundService : Service() {
         } catch (_: Exception) {
             false
         }
+        val hasActiveOttCallNotif = !OTTCallNotificationListener.currentActiveOttTag.isNullOrBlank() &&
+                OTTCallNotificationListener.isCallAnswered
         val isCall = (mode == AudioManager.MODE_IN_COMMUNICATION ||
                 mode == AudioManager.MODE_IN_CALL ||
-                hasVoipRecordingStream)
+                hasVoipRecordingStream ||
+                hasActiveOttCallNotif)
 
         if (isCall) {
             if (disableMode == "MANUAL_OFF" || !autoRecordOttEnabled) {

@@ -62,15 +62,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v3.0.1
-          name: "S22 Ultra Call Recorder Hub v3.0.1 (True Master App ON/OFF Power Lock + 100% Continuous Voice Capture)"
+          tag_name: v3.0.2
+          name: "S22 Ultra Call Recorder Hub v3.0.2 (Zalo 48kHz WebRTC Hardware Audio Fix + Persistent Accessibility Bridge)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.1)
-            - **Công Tắc Nguồn Tổng `BẬT / TẮT ỨNG DỤNG` (True Master Power Lock — Khi Đã Tắt Tuyệt Đối Không Tự Bật Lại)**:
-              + Khi bấm **`TẮT ỨNG DỤNG`** (hoặc **`TẮT & ĐÓNG APP`**), ứng dụng lập tức ngắt 100% dịch vụ chạy ngầm (`CallMonitorForegroundService`), ngắt Cầu nối Trợ năng (`OTTCallAccessibilityService`), ngắt bộ lắng nghe phần cứng (`OTTCallNotificationListener`), khóa `CallBootBroadcastReceiver` ở cấp `PackageManager` và lưu cờ khóa cứng `masterAppEnabled = false` đồng bộ (`.commit()`).
-              + **Bất biến Không Tự Bật Lại**: Khi đang ở trạng thái ĐÃ TẮT, ứng dụng tuyệt đối **KHÔNG BAO GIỜ tự bật lại** (dù mở lại giao diện App để nghe file cũ, có cuộc gọi SIM/Zalo đến, chuyển tab hay khởi động lại điện thoại) cho đến khi người dùng chủ động bấm vào nút **`BẬT ỨNG DỤNG`**.
-            - **Khắc Phục Triệt Để Lỗi Mất Tiếng ("Đa Số Không Thu Được Tiếng")**:
-              + Loại bỏ vòng lặp tự hủy `AudioRecord` sau `128ms` và thay thế cổng `Pitch Gate` bằng Bộ Khuếch Đại Giọng Nói Luôn Mở (`Always-Open 512-Point FFT Bandpass 200Hz–3600Hz + Capped Wiener`).
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.2)
+            - **Khắc Phục Triệt Để Lỗi Không Thu Được Âm Thanh Cuộc Gọi Zalo**:
+              + **Bảo Toàn Quyền Cầu Nối `S22U Call Bridge` Khi Bật/Tắt Ứng Dụng**: Sửa lỗi ở bản `v3.0.1` khi bấm `TẮT ỨNG DỤNG` đã gọi `disableSelf()` làm hệ điều hành Android thu hồi vĩnh viễn quyền `S22U Call Audio Bridge` (khiến khi bấm `BẬT ỨNG DỤNG` trở lại thì cầu nối bị chết ngầm và Android 16 khóa mic trong cuộc gọi Zalo). Từ `v3.0.2`, khi bấm `TẮT ỨNG DỤNG`, ứng dụng chỉ gỡ bỏ `1x1` Audio Anchor, hủy toàn bộ Listener và dừng dịch vụ chạy ngầm (0% Pin, không bao giờ tự bật lại), nhưng **giữ nguyên quyền `S22U Call Audio Bridge`** để khi bấm `BẬT ỨNG DỤNG` là thu âm Zalo 2 chiều ngay lập tức.
+              + **Khôi Phục Cấu Hình Phần Cứng `48000 Hz` + `AcousticEchoCanceler(false)` + `AutomaticGainControl(true)`**: Đồng bộ tần số lấy mẫu phần cứng `48000 Hz` khớp với bộ trộn VoIP WebRTC của Zalo trên S22 Ultra và tắt bộ khử vọng phần cứng (`AEC = false`) trên chip Qualcomm ADSP để ADSP không triệt tiêu tiếng người đầu dây bên kia phát ra từ loa thoại.
+              + **Tự Động Rebind Luồng `AudioRecord` Khi Zalo Kết Nối Đàm Thoại WebRTC**: Khi cuộc gọi Zalo chuyển từ Đổ chuông sang Đàm thoại (hoặc khi WebRTC của Zalo chiếm quyền mic làm `AudioRecord` chỉ trả về nhiễu lượng tử LSB `±1..±5`), động cơ tự động đóng luồng cũ và Rebind lại luồng `VOICE_RECOGNITION` trên `AccessibilityContext` sau `500ms`.
+              + **Bắt Sự Kiện Cuộc Gọi Zalo Trực Tiếp Trong `OTTCallAccessibilityService`**: Đăng ký `OnModeChangedListener` và `AudioRecordingCallback` ngay trong tiến trình Trợ năng của hệ thống (không bao giờ bị Samsung Freecess đóng băng ngầm).
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

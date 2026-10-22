@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.PixelFormat
 import android.media.AudioManager
+import android.media.AudioRecordingConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -195,43 +196,146 @@ class OTTCallAccessibilityService : AccessibilityService() {
         instance = this
     }
 
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
-            CallMonitorForegroundService.lastDetectedApp = "Ứng dụng ĐÃ TẮT HOÀN TOÀN (Không tự bật lại trừ khi bấm BẬT)"
-            safelyDisableSelfNow()
-            return
-        }
-        instance = this
-        CallMonitorForegroundService.dismissBridgeAlertNotification(this)
-        CallMonitorForegroundService.lastDetectedApp = "Cầu nối 2 chiều S22U Call Bridge ĐANG BẬT (Sẵn sàng thu âm)"
+    private var a11yModeListener: AudioManager.OnModeChangedListener? = null
+    private var a11yCallbacksRegistered = false
 
-        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        val mode = am?.mode ?: AudioManager.MODE_NORMAL
+    private val a11yRecordingCallback = object : AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
+            super.onRecordingConfigChanged(configs)
+            mainHandler.post {
+                evaluateCallStateInAccessibilityBridge()
+            }
+        }
+    }
+
+    private val a11yCallEndRunnable = Runnable {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@Runnable
+        val mode = am.mode
         val hasVoipStream = try {
-            am?.activeRecordingConfigurations?.any { cfg ->
+            am.activeRecordingConfigurations.any { cfg ->
                 val src = cfg.clientAudioSource
                 src == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION ||
                         src == android.media.MediaRecorder.AudioSource.VOICE_CALL
-            } == true
+            }
         } catch (_: Exception) {
             false
         }
         val inCallNow = (mode == AudioManager.MODE_IN_COMMUNICATION ||
                 mode == AudioManager.MODE_IN_CALL ||
                 hasVoipStream)
-
-        // TUYỆT ĐỐI KHÔNG gắn neo Overlay khi không có cuộc gọi để không làm App Ngân hàng báo lỗi!
-        if (dspEngine.isRecording) {
-            attachAccessibilityAudioAnchor()
-            dspEngine.requestAccessibilityStreamUpgrade()
-        } else if (inCallNow && CallMonitorForegroundService.autoRecordOttEnabled && CallMonitorForegroundService.disableMode != "MANUAL_OFF") {
-            attachAccessibilityAudioAnchor()
-            startCallRecordingFromAccessibilityBridge(mode)
+        if (!inCallNow) {
+            detachAccessibilityAudioAnchor()
+            if (dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
+                val saved = dspEngine.stopRecording()
+                val savedTag = saved?.get("appTag") ?: "Cuộc gọi"
+                CallMonitorForegroundService.lastDetectedApp =
+                    "$savedTag (Đã lưu .m4a • Cầu nối 2 chiều sẵn sàng)"
+            }
         }
     }
 
+    private fun registerDirectAudioCallbacks() {
+        if (a11yCallbacksRegistered || !CallMonitorForegroundService.isMasterAppEnabled(this)) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val l = AudioManager.OnModeChangedListener { _ ->
+                    mainHandler.post {
+                        evaluateCallStateInAccessibilityBridge()
+                    }
+                }
+                am.addOnModeChangedListener(mainExecutor, l)
+                a11yModeListener = l
+            }
+            am.registerAudioRecordingCallback(a11yRecordingCallback, mainHandler)
+            a11yCallbacksRegistered = true
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun unregisterDirectAudioCallbacks() {
+        if (!a11yCallbacksRegistered) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                a11yModeListener?.let { am?.removeOnModeChangedListener(it) }
+            }
+            am?.unregisterAudioRecordingCallback(a11yRecordingCallback)
+        } catch (_: Exception) {
+        }
+        a11yModeListener = null
+        a11yCallbacksRegistered = false
+    }
+
+    fun onMasterPowerChanged(enabled: Boolean) {
+        if (enabled) {
+            registerDirectAudioCallbacks()
+            evaluateCallStateInAccessibilityBridge()
+        } else {
+            mainHandler.removeCallbacks(a11yCallEndRunnable)
+            unregisterDirectAudioCallbacks()
+            detachAccessibilityAudioAnchor()
+            if (dspEngine.isRecording) {
+                dspEngine.stopRecording()
+            }
+        }
+    }
+
+    fun evaluateCallStateInAccessibilityBridge() {
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
+            detachAccessibilityAudioAnchor()
+            return
+        }
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val mode = am.mode
+        val hasVoipStream = try {
+            am.activeRecordingConfigurations.any { cfg ->
+                val src = cfg.clientAudioSource
+                src == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION ||
+                        src == android.media.MediaRecorder.AudioSource.VOICE_CALL
+            }
+        } catch (_: Exception) {
+            false
+        }
+        val hasActiveOttCallNotif = !OTTCallNotificationListener.currentActiveOttTag.isNullOrBlank() &&
+                OTTCallNotificationListener.isCallAnswered
+        val inCallNow = (mode == AudioManager.MODE_IN_COMMUNICATION ||
+                mode == AudioManager.MODE_IN_CALL ||
+                hasVoipStream ||
+                hasActiveOttCallNotif)
+
+        if (inCallNow) {
+            mainHandler.removeCallbacks(a11yCallEndRunnable)
+            attachAccessibilityAudioAnchor()
+            if (!dspEngine.isRecording) {
+                startCallRecordingFromAccessibilityBridge(mode)
+            } else {
+                dspEngine.requestAccessibilityStreamUpgrade()
+            }
+            CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
+        } else if (mode != AudioManager.MODE_RINGTONE && dspEngine.isRecording && dspEngine.currentAppTag != "Manual") {
+            mainHandler.removeCallbacks(a11yCallEndRunnable)
+            mainHandler.postDelayed(a11yCallEndRunnable, 650L)
+        }
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        CallMonitorForegroundService.dismissBridgeAlertNotification(this)
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
+            // KHÔNG gọi disableSelf() khi người dùng tạm TẮT ứng dụng để giữ nguyên quyền Trợ năng cho lần BẬT sau!
+            detachAccessibilityAudioAnchor()
+            unregisterDirectAudioCallbacks()
+            return
+        }
+        CallMonitorForegroundService.lastDetectedApp = "Cầu nối 2 chiều S22U Call Bridge ĐANG BẬT (Sẵn sàng thu âm)"
+        registerDirectAudioCallbacks()
+        evaluateCallStateInAccessibilityBridge()
+    }
+
     fun startCallRecordingFromAccessibilityBridge(audioMode: Int) {
+        if (!CallMonitorForegroundService.isMasterAppEnabled(this)) return
         attachAccessibilityAudioAnchor()
         if (dspEngine.isRecording) {
             dspEngine.requestAccessibilityStreamUpgrade()
@@ -261,7 +365,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!CallMonitorForegroundService.isMasterAppEnabled(this)) {
-            safelyDisableSelfNow()
+            detachAccessibilityAudioAnchor()
             return
         }
         if (event == null) return
@@ -287,8 +391,13 @@ class OTTCallAccessibilityService : AccessibilityService() {
                 return
             }
             if (CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.containsKey(pkg)) {
-                CallMonitorForegroundService.instance?.evaluateAudioHardwareInterrupt()
+                evaluateCallStateInAccessibilityBridge()
             }
+        } else if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+            CallMonitorForegroundService.SUPPORTED_OTT_PACKAGES.containsKey(pkg) &&
+            !dspEngine.isRecording
+        ) {
+            evaluateCallStateInAccessibilityBridge()
         }
     }
 
@@ -304,6 +413,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     fun safelyDisableSelfNow() {
+        unregisterDirectAudioCallbacks()
         detachAccessibilityAudioAnchor()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -317,6 +427,7 @@ class OTTCallAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        unregisterDirectAudioCallbacks()
         detachAccessibilityAudioAnchor()
         instance = null
         super.onDestroy()

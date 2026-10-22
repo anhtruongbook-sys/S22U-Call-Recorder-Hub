@@ -324,7 +324,6 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         _status['disableMode'] = enable ? 'NONE' : 'MANUAL_OFF';
         if (!enable) {
           _status['isRecording'] = false;
-          _status['accessibilityEnabled'] = false;
           _status['guardServiceRunning'] = false;
         }
       });
@@ -332,7 +331,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
     try {
       final res = await _channel.invokeMethod('setMasterRecordingEnabled', {
         'enabled': enable,
-        'openSettingsIfNeeded': false,
+        'openSettingsIfNeeded': enable,
         'closeApp': closeApp,
       });
       if (closeApp && !enable) return;
