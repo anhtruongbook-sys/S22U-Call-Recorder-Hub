@@ -195,10 +195,12 @@ class OTTCallAccessibilityService : AccessibilityService() {
                 return true
             }
 
-            if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (context != null) {
                 try {
-                    val appInfo = context.packageManager.getApplicationInfo(pkg, 0)
-                    if (appInfo.category == ApplicationInfo.CATEGORY_FINANCE) {
+                    val pm = context.packageManager
+                    val appInfo = pm.getApplicationInfo(pkg, 0)
+                    val label = pm.getApplicationLabel(appInfo)?.toString()?.trim() ?: ""
+                    if (label.isNotEmpty() && isBankingIconLabelClicked(label)) {
                         dynamicPackageCache[pkg] = true
                         return true
                     }
