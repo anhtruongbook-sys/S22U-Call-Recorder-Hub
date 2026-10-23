@@ -62,15 +62,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: v3.0.2
-          name: "S22 Ultra Call Recorder Hub v3.0.2 (Zalo 48kHz WebRTC Hardware Audio Fix + Persistent Accessibility Bridge)"
+          tag_name: v3.0.3
+          name: "S22 Ultra Call Recorder Hub v3.0.3 (0ms Auto-Disable Accessibility on App OFF & Banking Apps + Zalo 48kHz Audio)"
           body: |
-            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.2)
-            - **Khắc Phục Triệt Để Lỗi Không Thu Được Âm Thanh Cuộc Gọi Zalo**:
-              + **Bảo Toàn Quyền Cầu Nối `S22U Call Bridge` Khi Bật/Tắt Ứng Dụng**: Sửa lỗi ở bản `v3.0.1` khi bấm `TẮT ỨNG DỤNG` đã gọi `disableSelf()` làm hệ điều hành Android thu hồi vĩnh viễn quyền `S22U Call Audio Bridge` (khiến khi bấm `BẬT ỨNG DỤNG` trở lại thì cầu nối bị chết ngầm và Android 16 khóa mic trong cuộc gọi Zalo). Từ `v3.0.2`, khi bấm `TẮT ỨNG DỤNG`, ứng dụng chỉ gỡ bỏ `1x1` Audio Anchor, hủy toàn bộ Listener và dừng dịch vụ chạy ngầm (0% Pin, không bao giờ tự bật lại), nhưng **giữ nguyên quyền `S22U Call Audio Bridge`** để khi bấm `BẬT ỨNG DỤNG` là thu âm Zalo 2 chiều ngay lập tức.
-              + **Khôi Phục Cấu Hình Phần Cứng `48000 Hz` + `AcousticEchoCanceler(false)` + `AutomaticGainControl(true)`**: Đồng bộ tần số lấy mẫu phần cứng `48000 Hz` khớp với bộ trộn VoIP WebRTC của Zalo trên S22 Ultra và tắt bộ khử vọng phần cứng (`AEC = false`) trên chip Qualcomm ADSP để ADSP không triệt tiêu tiếng người đầu dây bên kia phát ra từ loa thoại.
-              + **Tự Động Rebind Luồng `AudioRecord` Khi Zalo Kết Nối Đàm Thoại WebRTC**: Khi cuộc gọi Zalo chuyển từ Đổ chuông sang Đàm thoại (hoặc khi WebRTC của Zalo chiếm quyền mic làm `AudioRecord` chỉ trả về nhiễu lượng tử LSB `±1..±5`), động cơ tự động đóng luồng cũ và Rebind lại luồng `VOICE_RECOGNITION` trên `AccessibilityContext` sau `500ms`.
-              + **Bắt Sự Kiện Cuộc Gọi Zalo Trực Tiếp Trong `OTTCallAccessibilityService`**: Đăng ký `OnModeChangedListener` và `AudioRecordingCallback` ngay trong tiến trình Trợ năng của hệ thống (không bao giờ bị Samsung Freecess đóng băng ngầm).
+            ## Ứng Dụng Ghi Âm Cuộc Gọi Toàn Diện Cho Samsung Galaxy S22 Ultra (Non-Root - v3.0.3)
+            - **Tự Động Tắt Trợ Năng (`disableSelf()`) Tức Thì `0ms` Khi Bấm `TẮT ỨNG DỤNG` Hoặc Khi Vào App Ngân Hàng**:
+              + **Khi Bấm `TẮT ỨNG DỤNG` / `TẮT & ĐÓNG APP`**: Lập tức gọi `disableSelf()` để tắt 100% dịch vụ Trợ năng `S22U Call Audio Bridge` trong Cài đặt Android (đảm bảo không còn bất kỳ dịch vụ Trợ năng nào chạy ngầm). Khi bấm `BẬT ỨNG DỤNG` trở lại, ứng dụng tự động bật lại (hoặc tự động mở ngay trang Cài đặt Trợ năng nếu máy chưa cấp `WRITE_SECURE_SETTINGS`).
+              + **Tự Động Tắt Trợ Năng `0ms` Khi Vào Mọi App Ngân Hàng / Ví Điện Tử / VNeID (`notificationTimeout="0"`)**:
+                * **Tầng 0 & Tầng 1**: Loại bỏ độ trễ `80ms` của Accessibility (`notificationTimeout="0"`), kiểm tra `event.packageName` và `rootInActiveWindow.packageName` ở **mọi loại sự kiện `AccessibilityEvent`** đối với hơn 65 ngân hàng/ví điện tử/VNeID + tự động phát hiện mọi ứng dụng thuộc nhóm Tài chính (`ApplicationInfo.CATEGORY_FINANCE`).
+                * **Tầng 2 (Bắt Chạm Icon Ngân Hàng Trên Màn Hình Chính Trước Khi App Ngân Hàng Khởi Chạy)**: Sửa lỗi ghép chuỗi `event.text` + `event.contentDescription` trên One UI Home Launcher và tự động quét tên hiển thị thực tế của mọi App Ngân hàng cài trên máy, giúp gọi `disableSelf()` ngay khoảnh khắc ngón tay chạm vào icon Ngân hàng.
+            - **Giữ Nguyên Động Cơ Thu Âm Zalo/OTT 48kHz Chuẩn Phần Cứng S22 Ultra**:
+              + Giữ nguyên luồng phần cứng `48000 Hz`, `AcousticEchoCanceler(false)`, `AutomaticGainControl(true)` và tự động Rebind khi Zalo kết nối WebRTC.
           files: build-output/S22U_CallRecorder.apk
           draft: false
           prerelease: false

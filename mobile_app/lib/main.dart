@@ -324,6 +324,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         _status['disableMode'] = enable ? 'NONE' : 'MANUAL_OFF';
         if (!enable) {
           _status['isRecording'] = false;
+          _status['accessibilityEnabled'] = false;
           _status['guardServiceRunning'] = false;
         }
       });
@@ -345,7 +346,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
             content: Text(
               a11yOn
                   ? '✅ Đã BẬT ứng dụng & tự động ghi âm cuộc gọi (SIM & Zalo/OTT)!'
-                  : '✅ Đã BẬT ứng dụng! Hãy bấm "Bật S22U Call Bridge Ngay" nếu muốn thu 2 chiều Zalo.',
+                  : '✅ Đã BẬT ứng dụng! Hãy bật "S22U Call Audio Bridge" trên màn hình Trợ năng để thu 2 chiều Zalo.',
             ),
           ),
         );
@@ -353,7 +354,7 @@ class _RecorderHomeScreenState extends State<RecorderHomeScreen> with WidgetsBin
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              '⏹️ Đã TẮT hoàn toàn ứng dụng (0% Pin). Sẽ KHÔNG tự bật lại trừ khi bạn bấm nút BẬT!',
+              '⏹️ Đã TẮT hoàn toàn ứng dụng & tự động TẮT Trợ năng (An toàn 100% Ngân hàng). Sẽ KHÔNG tự bật lại trừ khi bấm BẬT!',
             ),
           ),
         );

@@ -137,13 +137,9 @@ class CallMonitorForegroundService : Service() {
                 setBootReceiverEnabled(appCtx, false)
                 dismissBridgeAlertNotification(appCtx)
                 OTTCallAccessibilityService.instance?.onMasterPowerChanged(false)
-                // CHỈ tự động gỡ quyền Trợ năng nếu máy đã có WRITE_SECURE_SETTINGS (tự bật lại được).
-                // Nếu máy chưa có WRITE_SECURE_SETTINGS, chỉ ngắt neo Overlay & đưa về ngủ đông 0% CPU để khi người dùng bấm BẬT lại không bị mất quyền thu âm Zalo!
-                if (hasWriteSecureSettings(appCtx)) {
-                    disableEphemeralAccessibilityAfterCall(appCtx)
-                } else {
-                    OTTCallAccessibilityService.instance?.detachAccessibilityAudioAnchor()
-                }
+                // BẤT BIẾN: Khi người dùng bấm TẮT ỨNG DỤNG, BẮT BUỘC tự động tắt ngay Trợ năng (disableSelf())
+                // để không còn bất kỳ dịch vụ Trợ năng nào chạy ngầm và mở mọi App Ngân hàng an toàn 100%!
+                disableEphemeralAccessibilityAfterCall(appCtx)
                 OTTCallNotificationListener.instance?.onMasterPowerChanged(false)
                 lastDetectedApp = "Ứng dụng ĐÃ TẮT HOÀN TOÀN (Không tự bật lại trừ khi bấm BẬT)"
                 sharedEngineInstance?.let { engine ->
